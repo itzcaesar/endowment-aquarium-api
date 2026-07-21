@@ -157,23 +157,6 @@ npm run test:smoke
 Koleksi request Bruno berada di `tests/api/bruno/Tel-U-Endowment-Aquarium`. Atur variabel melalui
 `tests/api/environments/local.bru` atau `hosted.bru`.
 
-## Deployment
-
-1. Node API lokal + PostgreSQL lokal: gunakan `.env`, jalankan `db:migrate` dan `db:seed`, lalu
-   `npm run dev`.
-2. Node API lokal + PostgreSQL Supabase: arahkan `DATABASE_URL` ke connection string dari Supabase,
-   jalankan migrasi dan seed, lalu gunakan `npm run dev`. Docker dan PostgreSQL lokal tidak diperlukan.
-3. Node API hosted + PostgreSQL Supabase: deploy kedua workspace service ke penyedia hosting yang
-   mendukung Node.js 22+, lalu isi `DATABASE_URL`, `ENDOWMENT_WEBHOOK_SECRET`,
-   `GAME_API_WEBHOOK_URL`, dan `CORS_ORIGINS`.
-4. Docker Compose opsional: gunakan file compose yang tersedia untuk onboarding atau CI.
-5. Supabase Edge Functions bisa menjadi opsi runtime di masa depan, tetapi belum diterapkan pada MVP
-   ini. Implementasinya harus memakai handler Deno/Fetch dengan tetap mempertahankan schema, kontrak,
-   HMAC, idempotensi, dan DTO yang sama.
-
-Jangan pernah mengekspos `DATABASE_URL`, Supabase service-role key, webhook secret, email donatur,
-atau payload webhook mentah ke Unity. Unity hanya berkomunikasi dengan Game API melalui HTTPS.
-
 ## Tabel database
 
 Schema berisi tabel MVP yang sudah ditetapkan: `donors`, `aquariums`, `fish_tiers`, `fish_species`,
