@@ -6,7 +6,7 @@ database PostgreSQL menjadi sumber data utama.
 ## Arsitektur
 
 ```text
-Mock Endowment API -- webhook HMAC --> Game API -- Drizzle --> PostgreSQL / Supabase
+Mock Endowment API --> webhook HMAC --> Game API -- Drizzle --> PostgreSQL / Supabase
                                                                ^
                                                                |
                                                          Unity WebGL HTTPS
