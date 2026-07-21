@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: endowment_aquarium
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - endowment-postgres:/var/lib/postgresql/data
+
+  game-api:
+    build:
+      context: .
+      args:
+        APP: game-api
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      GAME_API_PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/endowment_aquarium
+      ENDOWMENT_WEBHOOK_SECRET: replace-me-with-at-least-16-characters
+      GAME_API_WEBHOOK_URL: http://game-api:3000/webhooks/v1/endowment
+      WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: 300
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+    ports:
+      - '3000:3000'
+    depends_on:
+      - postgres
+
+  mock-endowment-api:
+    build:
+      context: .
+      args:
+        APP: mock-endowment-api
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      MOCK_API_PORT: 4000
+      GAME_API_WEBHOOK_URL: http://game-api:3000/webhooks/v1/endowment
+      ENDOWMENT_WEBHOOK_SECRET: replace-me-with-at-least-16-characters
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+    ports:
+      - '4000:4000'
+    depends_on:
+      - game-api
+
+volumes:
+  endowment-postgres:

@@ -1,0 +1,6 @@
+meta { name: Feed fish type: http seq: 12 }
+post {
+  url: {{baseUrl}}/api/v1/me/fish/{{fishId}}/feed
+  headers { Authorization: Bearer {{accessToken}} }
+}
+

@@ -1,0 +1,43 @@
+{
+  "name": "@telu/game-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "predev": "npm run build --workspace=@telu/contracts",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "prebuild": "npm run build --workspace=@telu/contracts",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "npm run build --workspace=@telu/contracts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "vitest run --config vitest.config.ts src/tests/unit",
+    "test:integration": "vitest run --config vitest.config.ts src/tests/integration",
+    "test:api": "vitest run --config vitest.config.ts src/tests/api",
+    "test:e2e": "vitest run --config vitest.config.ts src/tests/e2e",
+    "test:smoke": "tsx scripts/smoke.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "db:reset": "tsx src/db/reset.ts",
+    "db:studio": "drizzle-kit studio",
+    "dev:issue-token": "tsx src/cli/issue-token.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/swagger": "9.8.1",
+    "@fastify/swagger-ui": "6.1.0",
+    "@telu/contracts": "1.0.0",
+    "dotenv": "17.4.2",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.10.0",
+    "fastify-raw-body": "5.0.0",
+    "postgres": "3.4.9",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10"
+  }
+}

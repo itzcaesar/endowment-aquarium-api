@@ -1,0 +1,47 @@
+{
+  "name": "tel-u-endowment-aquarium",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tel-U Endowment Aquarium API monorepo",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n game,mock -c blue,green \"npm:dev:game\" \"npm:dev:mock\"",
+    "dev:game": "npm run dev --workspace=@telu/game-api",
+    "dev:mock": "npm run dev --workspace=@telu/mock-endowment-api",
+    "dev:issue-token": "npm run dev:issue-token --workspace=@telu/game-api --",
+    "build": "npm run build --workspace=@telu/contracts && npm run build --workspace=@telu/game-api && npm run build --workspace=@telu/mock-endowment-api",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "npm run build --workspace=@telu/contracts && npm run typecheck --workspaces --if-present",
+    "test": "npm run test:unit && npm run test:integration && npm run test:api && npm run test:e2e",
+    "test:unit": "npm run test:unit --workspace=@telu/game-api && npm run test:unit --workspace=@telu/mock-endowment-api",
+    "test:integration": "npm run test:integration --workspace=@telu/game-api",
+    "test:api": "npm run test:api --workspace=@telu/game-api && npm run test:api --workspace=@telu/mock-endowment-api",
+    "test:e2e": "npm run test:e2e --workspace=@telu/game-api",
+    "test:smoke": "npm run test:smoke --workspace=@telu/game-api",
+    "db:generate": "npm run db:generate --workspace=@telu/game-api",
+    "db:migrate": "npm run db:migrate --workspace=@telu/game-api",
+    "db:seed": "npm run db:seed --workspace=@telu/game-api",
+    "db:reset": "npm run db:reset --workspace=@telu/game-api",
+    "db:studio": "npm run db:studio --workspace=@telu/game-api"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.1.1",
+    "concurrently": "10.0.3",
+    "eslint": "10.7.0",
+    "eslint-plugin-import-x": "4.17.1",
+    "prettier": "3.9.5",
+    "tsx": "4.23.1",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.64.0",
+    "vitest": "4.1.10"
+  }
+}

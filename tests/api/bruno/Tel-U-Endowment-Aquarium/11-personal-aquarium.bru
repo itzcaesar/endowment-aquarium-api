@@ -1,0 +1,6 @@
+meta { name: Personal aquarium type: http seq: 11 }
+get {
+  url: {{baseUrl}}/api/v1/me/aquarium
+  headers { Authorization: Bearer {{accessToken}} }
+}
+

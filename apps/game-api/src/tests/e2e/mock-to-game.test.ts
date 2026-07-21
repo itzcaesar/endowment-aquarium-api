@@ -1,0 +1,72 @@
+import { describe, expect, it } from 'vitest';
+
+import { createApp as createGameApp } from '../../app.js';
+import { MemoryStore } from '../../store/memory-store.js';
+import { createApp as createMockApp } from '../../../../mock-endowment-api/src/app.js';
+
+const gameConfig = {
+  nodeEnv: 'test' as const,
+  logLevel: 'silent' as const,
+  port: 0,
+  databaseUrl: 'postgresql://postgres:postgres@localhost:5432/test',
+  webhookSecret: 'test-webhook-secret-123456',
+  webhookTimestampToleranceSeconds: 300,
+  corsOrigins: [],
+};
+
+describe('mock-to-game end-to-end flow', () => {
+  it('creates a rare fish, replays idempotently, and refunds it', async () => {
+    const game = await createGameApp({ config: gameConfig, store: new MemoryStore() });
+    await game.listen({ port: 0, host: '127.0.0.1' });
+    const address = game.server.address();
+    if (!address || typeof address === 'string')
+      throw new Error('Game server did not expose a port');
+
+    const mock = await createMockApp({
+      config: {
+        nodeEnv: 'test',
+        logLevel: 'silent',
+        port: 0,
+        webhookUrl: `http://127.0.0.1:${address.port}/webhooks/v1/endowment`,
+        webhookSecret: gameConfig.webhookSecret,
+        corsOrigins: [],
+      },
+    });
+    await mock.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      const created = await mock.inject({ method: 'POST', url: '/mock/v1/scenarios/rare' });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().data.delivery.statusCode).toBe(202);
+      const firstBig = await game.inject({ method: 'GET', url: '/api/v1/big-aquarium?limit=15' });
+      expect(firstBig.json().data.fish).toHaveLength(1);
+      expect(firstBig.json().data.fish[0]).toMatchObject({
+        speciesCode: 'CLOWNFISH',
+        assetCode: 'FISH_RARE_CLOWNFISH',
+      });
+
+      const donationId = created.json().data.donationId as string;
+      const replay = await mock.inject({
+        method: 'POST',
+        url: `/mock/v1/donations/${donationId}/replay`,
+      });
+      expect(replay.json().data.delivery.statusCode).toBe(200);
+      expect(
+        (await game.inject({ method: 'GET', url: '/api/v1/big-aquarium?limit=15' })).json().data
+          .fish,
+      ).toHaveLength(1);
+
+      const refund = await mock.inject({
+        method: 'POST',
+        url: `/mock/v1/donations/${donationId}/refund`,
+      });
+      expect(refund.json().data.delivery.statusCode).toBe(202);
+      expect(
+        (await game.inject({ method: 'GET', url: '/api/v1/big-aquarium?limit=15' })).json().data
+          .fish,
+      ).toHaveLength(0);
+    } finally {
+      await mock.close();
+      await game.close();
+    }
+  }, 15_000);
+});

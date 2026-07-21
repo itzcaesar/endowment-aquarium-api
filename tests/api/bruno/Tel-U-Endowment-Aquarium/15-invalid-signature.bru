@@ -1,0 +1,7 @@
+meta { name: Invalid webhook signature type: http seq: 15 }
+post {
+  url: {{baseUrl}}/webhooks/v1/endowment
+  headers { Content-Type: application/json X-Endowment-Event-ID: invalid X-Endowment-Timestamp: 1 X-Endowment-Signature: 00 }
+  body: json { eventId: invalid eventType: donation.confirmed }
+}
+

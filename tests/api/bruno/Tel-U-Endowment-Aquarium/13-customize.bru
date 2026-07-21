@@ -1,0 +1,7 @@
+meta { name: Customize fish type: http seq: 13 }
+patch {
+  url: {{baseUrl}}/api/v1/me/fish/{{fishId}}/appearance
+  headers { Authorization: Bearer {{accessToken}} Content-Type: application/json }
+  body: json { colorCode: OCEAN_BLUE accessoryCode: TELU_CAP }
+}
+
