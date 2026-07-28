@@ -123,7 +123,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         version: '1.0.0',
         description: 'Stable REST contract for the Tel-U Endowment Aquarium Unity client.',
       },
-      servers: [{ url: 'http://localhost:3000' }],
+      servers: [{ url: '/' }],
       components: {
         schemas: {
           ErrorEnvelope: errorResponseSchema,

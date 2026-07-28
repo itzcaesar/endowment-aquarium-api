@@ -1,0 +1,23 @@
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !reset []
+
+  game-api:
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      GAME_API_WEBHOOK_URL: https://api-endowment.itzcaesar.space/webhooks/v1/endowment
+      CORS_ORIGINS: https://api-endowment.itzcaesar.space
+    ports: !reset []
+    networks:
+      default:
+      huly-proxy:
+        aliases:
+          - endowment-game-api
+
+networks:
+  huly-proxy:
+    external: true
+    name: huly_v7_huly_net

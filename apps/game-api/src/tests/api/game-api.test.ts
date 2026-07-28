@@ -94,6 +94,7 @@ describe('Game API HTTP contract', () => {
     expect(docs.body).toContain('Scalar');
 
     const openapi = (await app.inject({ method: 'GET', url: '/openapi.json' })).json() as {
+      servers: Array<{ url: string }>;
       paths: Record<
         string,
         Record<
@@ -108,6 +109,7 @@ describe('Game API HTTP contract', () => {
       >;
     };
 
+    expect(openapi.servers).toEqual([{ url: '/' }]);
     const gamePaths = Object.entries(openapi.paths).filter(
       ([path]) => path.startsWith('/api/') || path.startsWith('/webhooks/'),
     );
