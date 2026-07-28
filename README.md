@@ -59,8 +59,9 @@ npm run dev
 ```
 
 Game API berjalan di `http://localhost:3000`, sedangkan Mock API di `http://localhost:4000`.
-Dokumentasi Swagger tersedia di [http://localhost:3000/docs](http://localhost:3000/docs) dan dokumen
-OpenAPI di [http://localhost:3000/openapi.json](http://localhost:3000/openapi.json).
+Scalar API Reference untuk GAME API tersedia di
+[http://localhost:3000/docs](http://localhost:3000/docs), dan dokumen OpenAPI-nya tersedia di
+[http://localhost:3000/openapi.json](http://localhost:3000/openapi.json).
 
 Untuk running salah satu service saja, gunakan `npm run dev:game` atau `npm run dev:mock`.
 Data donasi pada Mock API hanya disimpan di memory, jadi akan kembali kosong setiap kali service
@@ -116,7 +117,7 @@ mentah, hash access token, atau kredensial database.
 ## Akses personal khusus development
 
 Setelah data donatur tersedia, misalnya setelah running mock scenario, buat token yang berlaku
-selama tujuh hari. Token mentah hanya ditampilkan satu kali oleh  berikut agar bisa dipakai
+selama tujuh hari. Token mentah hanya ditampilkan satu kali oleh berikut agar bisa dipakai
 dalam request curl lokal. Di database, token disimpan dalam bentuk hash dan tidak pernah ditulis ke
 log API.
 

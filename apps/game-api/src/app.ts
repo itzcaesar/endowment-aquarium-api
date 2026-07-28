@@ -16,13 +16,14 @@ import {
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
+import scalarApiReference from '@scalar/fastify-api-reference';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import rawBody from 'fastify-raw-body';
 import { z } from 'zod';
 
 import type { GameApiConfig } from './config/environment.js';
 import { createDatabaseConnection } from './db/client.js';
+import { documentedResponse, errorExamples, responseExamples } from './openapi/examples.js';
 import { PostgresStore } from './store/postgres-store.js';
 import type { AppStore } from './store/types.js';
 import { hashAccessToken, bearerToken } from './modules/auth/token-service.js';
@@ -143,7 +144,13 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       },
     },
   });
-  await app.register(swaggerUi, { routePrefix: '/docs' });
+  await app.register(scalarApiReference, {
+    routePrefix: '/docs',
+    configuration: {
+      pageTitle: 'Tel-U Endowment Aquarium API',
+      spec: { url: '/openapi.json' },
+    },
+  });
 
   app.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
@@ -201,8 +208,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       schema: {
         tags: ['health'],
         response: {
-          200: jsonSchema(successEnvelopeSchema(healthDataSchema)),
-          500: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(healthDataSchema),
+            responseExamples.health,
+            'The GAME API is available.',
+          ),
+          500: documentedResponse(errorEnvelopeSchema, errorExamples.internal),
         },
       },
     },
@@ -215,8 +226,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       schema: {
         tags: ['health'],
         response: {
-          200: jsonSchema(successEnvelopeSchema(metaDataSchema)),
-          500: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(metaDataSchema),
+            responseExamples.meta,
+            'The version and service metadata used by the Unity client.',
+          ),
+          500: documentedResponse(errorEnvelopeSchema, errorExamples.internal),
         },
       },
     },
@@ -235,9 +250,16 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         tags: ['auth'],
         body: jsonSchema(z.object({ token: z.string().min(1) }).strict()),
         response: {
-          200: jsonSchema(successEnvelopeSchema(authExchangeDataSchema)),
-          400: errorResponseSchema,
-          401: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(authExchangeDataSchema),
+            responseExamples.authExchange,
+            'The opaque token can be used as a Bearer token for personal GAME API routes.',
+          ),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.validation),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.authenticationRequired,
+            ...errorExamples.invalidToken,
+          ]),
         },
       },
     },
@@ -261,9 +283,15 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         tags: ['aquariums'],
         security: [{ bearerAuth: [] }],
         response: {
-          200: jsonSchema(successEnvelopeSchema(personalAquariumSchema)),
-          401: errorResponseSchema,
-          404: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(personalAquariumSchema),
+            responseExamples.personalAquarium,
+          ),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.authenticationRequired,
+            ...errorExamples.invalidToken,
+          ]),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.aquariumNotFound),
         },
       },
     },
@@ -280,8 +308,11 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
       schema: {
         tags: ['aquariums'],
         response: {
-          200: jsonSchema(successEnvelopeSchema(publicAquariumSchema)),
-          404: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(publicAquariumSchema),
+            responseExamples.publicAquarium,
+          ),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.aquariumNotFound),
         },
       },
     },
@@ -302,8 +333,11 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         tags: ['aquariums'],
         querystring: jsonSchema(bigAquariumQuerySchema),
         response: {
-          200: jsonSchema(successEnvelopeSchema(bigAquariumSchema)),
-          400: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(bigAquariumSchema),
+            responseExamples.bigAquarium,
+          ),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.validation),
         },
       },
     },
@@ -320,10 +354,16 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         tags: ['fish'],
         security: [{ bearerAuth: [] }],
         response: {
-          200: jsonSchema(successEnvelopeSchema(feedDataSchema)),
-          401: errorResponseSchema,
-          404: errorResponseSchema,
-          409: errorResponseSchema,
+          200: documentedResponse(successEnvelopeSchema(feedDataSchema), responseExamples.feed),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.authenticationRequired,
+            ...errorExamples.invalidToken,
+          ]),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.fishNotFound),
+          409: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.feedingCooldown,
+            ...errorExamples.fishInactive,
+          ]),
         },
       },
     },
@@ -347,11 +387,17 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         security: [{ bearerAuth: [] }],
         body: jsonSchema(appearanceInputSchema),
         response: {
-          200: jsonSchema(successEnvelopeSchema(appearanceDataSchema)),
-          400: errorResponseSchema,
-          401: errorResponseSchema,
-          404: errorResponseSchema,
-          409: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(appearanceDataSchema),
+            responseExamples.appearance,
+          ),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.validation),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.authenticationRequired,
+            ...errorExamples.invalidToken,
+          ]),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.fishNotFound),
+          409: documentedResponse(errorEnvelopeSchema, errorExamples.fishInactive),
         },
       },
     },
@@ -376,9 +422,12 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         tags: ['game-events'],
         querystring: jsonSchema(eventsQuerySchema),
         response: {
-          200: jsonSchema(successEnvelopeSchema(gameEventsPageSchema)),
-          400: errorResponseSchema,
-          404: errorResponseSchema,
+          200: documentedResponse(
+            successEnvelopeSchema(gameEventsPageSchema),
+            responseExamples.events,
+          ),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.validation),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.aquariumNotFound),
         },
       },
     },
@@ -410,11 +459,18 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         },
         body: jsonSchema(endowmentWebhookSchema),
         response: {
-          200: jsonSchema(successEnvelopeSchema(webhookAcceptedDataSchema)),
-          202: jsonSchema(successEnvelopeSchema(webhookAcceptedDataSchema)),
-          400: errorResponseSchema,
-          401: errorResponseSchema,
-          422: errorResponseSchema,
+          200: documentedResponse(successEnvelopeSchema(webhookAcceptedDataSchema), [
+            responseExamples.webhookAccepted[1],
+          ]),
+          202: documentedResponse(successEnvelopeSchema(webhookAcceptedDataSchema), [
+            responseExamples.webhookAccepted[0],
+          ]),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.invalidWebhookBody),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.invalidWebhookSignature,
+            ...errorExamples.webhookEventIdMismatch,
+          ]),
+          422: documentedResponse(errorEnvelopeSchema, errorExamples.noMatchingTier),
         },
       },
     },

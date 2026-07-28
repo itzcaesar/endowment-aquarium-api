@@ -87,6 +87,46 @@ describe('Game API HTTP contract', () => {
     });
   });
 
+  it('serves Scalar docs with examples for every GAME API response', async () => {
+    const docs = await app.inject({ method: 'GET', url: '/docs/' });
+    expect(docs.statusCode).toBe(200);
+    expect(docs.headers['content-type']).toContain('text/html');
+    expect(docs.body).toContain('Scalar');
+
+    const openapi = (await app.inject({ method: 'GET', url: '/openapi.json' })).json() as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            responses?: Record<
+              string,
+              { content?: { 'application/json'?: { examples?: Record<string, unknown> } } }
+            >;
+          }
+        >
+      >;
+    };
+
+    const gamePaths = Object.entries(openapi.paths).filter(
+      ([path]) => path.startsWith('/api/') || path.startsWith('/webhooks/'),
+    );
+    expect(gamePaths).toHaveLength(10);
+    expect(Object.keys(openapi.paths).some((path) => path.startsWith('/mock/'))).toBe(false);
+
+    for (const [path, pathItem] of gamePaths) {
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (!['get', 'post', 'patch', 'put', 'delete'].includes(method)) continue;
+        for (const [status, response] of Object.entries(operation.responses ?? {})) {
+          expect(
+            Object.keys(response.content?.['application/json']?.examples ?? {}),
+            `${method.toUpperCase()} ${path} ${status} should have a response example`,
+          ).not.toHaveLength(0);
+        }
+      }
+    }
+  });
+
   it('allows configured browser origins without treating other origins as server errors', async () => {
     const allowed = await app.inject({
       method: 'GET',
