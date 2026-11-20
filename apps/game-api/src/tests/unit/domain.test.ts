@@ -9,6 +9,8 @@ import {
 } from '../../modules/webhooks/signature-service.js';
 import { tierSeed } from '../../db/seed-data.js';
 import { appearanceInputSchema, bigAquariumQuerySchema } from '@telu/contracts';
+import { toCsv } from '../../modules/admin/csv.js';
+import { hourlyBuckets } from '../../modules/dashboard/hourly-buckets.js';
 
 describe('tier resolver', () => {
   it.each([
@@ -148,5 +150,41 @@ describe('contract validation', () => {
     ).toBe(false);
     expect(bigAquariumQuerySchema.safeParse({ limit: 51 }).success).toBe(false);
     expect(bigAquariumQuerySchema.safeParse({ limit: 15 }).success).toBe(true);
+  });
+});
+
+describe('CSV export', () => {
+  it('quotes special characters and neutralises spreadsheet formulas', () => {
+    const csv = toCsv(
+      ['name', 'note'],
+      [
+        ['=HYPERLINK("x")', 'a,b'],
+        ['Dewi "D" Lestari', null],
+      ],
+    );
+    expect(csv.startsWith('﻿')).toBe(true);
+    expect(csv.slice(1).split('\r\n')).toEqual([
+      'name,note',
+      `"'=HYPERLINK(""x"")","a,b"`,
+      '"Dewi ""D"" Lestari",',
+      '',
+    ]);
+  });
+});
+
+describe('hourly buckets', () => {
+  it('returns 24 buckets ending with the current hour', () => {
+    const now = new Date('2026-11-20T12:30:00.000Z');
+    const buckets = hourlyBuckets(now, [
+      new Date('2026-11-20T12:05:00.000Z'),
+      new Date('2026-11-20T11:59:00.000Z'),
+      new Date('2026-11-19T12:59:00.000Z'),
+      new Date('2026-11-19T11:59:00.000Z'),
+    ]);
+    expect(buckets).toHaveLength(24);
+    expect(buckets.at(-1)).toEqual({ hour: '2026-11-20T12:00:00.000Z', count: 1 });
+    expect(buckets.at(-2)?.count).toBe(1);
+    expect(buckets[0]).toEqual({ hour: '2026-11-19T13:00:00.000Z', count: 0 });
+    expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2);
   });
 });

@@ -210,7 +210,7 @@
       latency,
       endowment.lastError
         ? `Last error ${endowment.lastError.code} (${relativeTime(endowment.lastError.at)})`
-        : 'No upstream errors since restart',
+        : 'No upstream errors recorded',
     ]);
   }
 
@@ -559,7 +559,7 @@
     );
     if (endowment.recent.length === 0) {
       $('lookup-table').replaceChildren(
-        el('p', { className: 'empty', text: 'No NIK logins since the API last restarted.' }),
+        el('p', { className: 'empty', text: 'No NIK logins recorded yet.' }),
       );
       return;
     }

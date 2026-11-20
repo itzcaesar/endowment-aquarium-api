@@ -19,6 +19,7 @@ import {
   resyncSchema,
 } from './admin-schemas.js';
 import { AdminService } from './admin-service.js';
+import { toCsv } from './csv.js';
 
 interface AdminRouteOptions {
   sql: Sql | null;
@@ -81,6 +82,102 @@ export async function registerAdminRoutes(
       request.id,
       await admin.updateFish(id(request), input, actor(request), new Date()),
     );
+  });
+
+  app.get('/api/v1/admin/fish/:id/history', hidden, async (request) => {
+    const admin = guard(request);
+    return successEnvelope(request.id, { items: await admin.fishHistory(id(request)) });
+  });
+
+  // Exports contain personal data, so each one is recorded in the audit log.
+  app.get('/api/v1/admin/export/:kind', writeLimit, async (request, reply) => {
+    const admin = guard(request);
+    const { kind } = parseInput(
+      z.object({ kind: z.enum(['donors.csv', 'fish.csv']) }),
+      request.params,
+    );
+    const stamp = new Date().toISOString().slice(0, 10);
+    let csv: string;
+    let count: number;
+    if (kind === 'donors.csv') {
+      const page = await admin.listDonors({ page: 1, pageSize: 50_000, source: 'all' });
+      count = page.items.length;
+      csv = toCsv(
+        [
+          'id',
+          'name',
+          'nik_masked',
+          'source',
+          'show_name_publicly',
+          'total_donation_idr',
+          'tier',
+          'public_slug',
+          'active_fish',
+          'points',
+          'last_synced_at',
+          'created_at',
+        ],
+        page.items.map((d) => [
+          d.id,
+          d.name,
+          d.nikMasked,
+          d.source,
+          d.showNamePublicly,
+          d.totalDonation,
+          d.tierCode,
+          d.publicSlug,
+          d.activeFish,
+          d.points,
+          d.lastSyncedAt,
+          d.createdAt,
+        ]),
+      );
+    } else {
+      const page = await admin.listFish({ page: 1, pageSize: 50_000, status: 'all' }, new Date());
+      count = page.items.length;
+      csv = toCsv(
+        [
+          'id',
+          'display_name',
+          'species',
+          'tier',
+          'color',
+          'accessory',
+          'hunger',
+          'mood',
+          'active',
+          'donor_id',
+          'donor_name',
+          'public_slug',
+          'created_at',
+        ],
+        page.items.map((f) => [
+          f.id,
+          f.displayName,
+          f.species.code,
+          f.tierCode,
+          f.colorCode,
+          f.accessoryCode,
+          f.hunger,
+          f.mood,
+          f.isActive,
+          f.donor.id,
+          f.donor.name,
+          f.publicSlug,
+          f.createdAt,
+        ]),
+      );
+    }
+    await admin.recordAudit(actor(request), `export.${kind.replace('.csv', '')}`, 'export', kind, {
+      rows: count,
+    });
+    reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header(
+        'content-disposition',
+        `attachment; filename="aquarium-${kind.replace('.csv', '')}-${stamp}.csv"`,
+      );
+    return csv;
   });
 
   app.get('/api/v1/admin/donors', hidden, async (request) => {

@@ -39,6 +39,7 @@ export default tseslint.config(
           'location',
           'URLSearchParams',
           'MutationObserver',
+          'URL',
         ].map((name) => [name, 'readonly']),
       ),
     },

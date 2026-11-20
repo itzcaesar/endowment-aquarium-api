@@ -90,7 +90,7 @@ export const inventoryUpdateSchema = z
 
 export const auditQuerySchema = z.object({
   ...pageQuery,
-  targetType: z.enum(['fish', 'donor', 'inventory']).optional(),
+  targetType: z.enum(['fish', 'donor', 'inventory', 'export']).optional(),
   targetId: z.string().max(64).optional(),
 });
 

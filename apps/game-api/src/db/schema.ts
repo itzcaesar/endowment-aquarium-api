@@ -246,3 +246,16 @@ export const adminAuditLog = pgTable(
     index('admin_audit_log_target_idx').on(table.targetType, table.targetId),
   ],
 );
+
+/** One row per server-to-server Endowment lookup (no NIK stored), for dashboard health history. */
+export const endowmentLookups = pgTable(
+  'endowment_lookups',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    outcome: varchar('outcome', { length: 20 }).notNull(),
+    code: varchar('code', { length: 80 }),
+    latencyMs: integer('latency_ms').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('endowment_lookups_created_at_idx').on(table.createdAt)],
+);

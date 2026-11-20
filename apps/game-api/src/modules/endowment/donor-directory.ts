@@ -126,6 +126,16 @@ function percentile(sorted: number[], fraction: number): number | null {
   return sorted[Math.max(0, index)] ?? null;
 }
 
+/** Optional durable store so lookup health survives restarts and deploys. */
+export interface LookupHistory {
+  save(record: LookupRecord): Promise<void>;
+  load(limit: number): Promise<{
+    recent: LookupRecord[];
+    totals: { ok: number; notFound: number; error: number };
+    lastError: { code: string; at: string } | null;
+  }>;
+}
+
 /**
  * Wraps a directory and keeps in-process metrics about real lookups (no NIKs are stored),
  * so the operations dashboard can show upstream health without extra probe calls.
@@ -139,7 +149,18 @@ export class InstrumentedDonorDirectory implements DonorDirectory {
     private readonly inner: DonorDirectory,
     private readonly host: string,
     private readonly capacity = 100,
+    private readonly history: LookupHistory | null = null,
+    private readonly onHistoryError: (error: unknown) => void = () => {},
   ) {}
+
+  /** Restores recent lookups and totals from the history store (call once at startup). */
+  public async hydrate(): Promise<void> {
+    if (!this.history) return;
+    const loaded = await this.history.load(this.capacity);
+    this.records.splice(0, this.records.length, ...loaded.recent);
+    Object.assign(this.totals, loaded.totals);
+    this.lastError = loaded.lastError;
+  }
 
   public async findByNik(nik: string): Promise<EndowmentDonor> {
     const started = performance.now();
@@ -156,7 +177,15 @@ export class InstrumentedDonorDirectory implements DonorDirectory {
 
   private record(outcome: LookupOutcome, code: string | null, started: number): void {
     const at = new Date().toISOString();
-    this.records.push({ at, outcome, code, latencyMs: Math.round(performance.now() - started) });
+    const entry: LookupRecord = {
+      at,
+      outcome,
+      code,
+      latencyMs: Math.round(performance.now() - started),
+    };
+    this.records.push(entry);
+    // Persisting is best-effort: a metrics write must never fail a donor login.
+    if (this.history) this.history.save(entry).catch(this.onHistoryError);
     if (this.records.length > this.capacity) this.records.shift();
     if (outcome === 'ok') this.totals.ok += 1;
     else if (outcome === 'not_found') this.totals.notFound += 1;

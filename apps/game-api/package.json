@@ -22,6 +22,7 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts",
     "db:studio": "drizzle-kit studio",
+    "db:cleanup": "tsx src/cli/cleanup.ts",
     "dev:issue-token": "tsx src/cli/issue-token.ts"
   },
   "dependencies": {
