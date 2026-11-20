@@ -9,6 +9,7 @@ const config = {
   port: 4000,
   webhookUrl: 'http://localhost:3000/webhooks/v1/endowment',
   webhookSecret: 'test-webhook-secret-123456',
+  endowmentApiTicket: 'test-endowment-ticket',
   corsOrigins: ['http://localhost:5173'],
 };
 
@@ -112,6 +113,64 @@ describe('Mock Endowment API', () => {
       });
       expect(disallowed.statusCode).toBe(200);
       expect(disallowed.headers['access-control-allow-origin']).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves the ticket-protected Endowment donor lookup by NIK', async () => {
+    const app = await createApp({
+      config,
+      deliver: async () => ({ statusCode: 202, responseBody: null }),
+    });
+    try {
+      const url = '/api/v1/donors/3171010101010004';
+      expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      expect(
+        (await app.inject({ method: 'GET', url, headers: { authorization: 'Bearer nope' } }))
+          .statusCode,
+      ).toBe(401);
+
+      const bearer = await app.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: `Bearer ${config.endowmentApiTicket}` },
+      });
+      expect(bearer.statusCode).toBe(200);
+      expect(bearer.json().data).toEqual({
+        nik: '3171010101010004',
+        nama: 'Dewi Lestari',
+        total_donasi: 30_000_000,
+      });
+
+      const apiKey = await app.inject({
+        method: 'GET',
+        url: '/api/v1/donors/1234',
+        headers: { 'x-api-key': config.endowmentApiTicket },
+      });
+      expect(apiKey.statusCode).toBe(400);
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/mock/v1/donors',
+        payload: { nik: '3171010101019999', nama: 'Donor Baru', total_donasi: 75_000 },
+      });
+      expect(created.statusCode).toBe(200);
+      const fetched = await app.inject({
+        method: 'GET',
+        url: '/api/v1/donors/3171010101019999',
+        headers: { 'x-api-key': config.endowmentApiTicket },
+      });
+      expect(fetched.json().data.total_donasi).toBe(75_000);
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: '/api/v1/donors/3171010101018888',
+            headers: { 'x-api-key': config.endowmentApiTicket },
+          })
+        ).statusCode,
+      ).toBe(404);
     } finally {
       await app.close();
     }

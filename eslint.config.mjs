@@ -21,6 +21,29 @@ export default tseslint.config(
     },
   },
   {
+    // Plain browser script for the operations dashboard (served as-is, no bundler).
+    files: ['apps/game-api/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: Object.fromEntries(
+        [
+          'window',
+          'document',
+          'sessionStorage',
+          'fetch',
+          'Node',
+          'setTimeout',
+          'clearTimeout',
+          'requestAnimationFrame',
+          'cancelAnimationFrame',
+          'location',
+          'URLSearchParams',
+          'MutationObserver',
+        ].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
     files: ['**/*.test.ts', '**/*.config.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',

@@ -3,10 +3,50 @@ import type {
   BigAquarium,
   EndowmentWebhook,
   GameEventsPage,
+  Inventory,
   PersonalAquarium,
   PersonalFish,
   PublicAquarium,
+  TierCode,
 } from '@telu/contracts';
+
+export interface DonorSyncInput {
+  nik: string;
+  name: string;
+  totalDonation: number;
+}
+
+export interface SyncedDonor {
+  donorId: string;
+  nik: string;
+  name: string;
+  tierCode: TierCode | null;
+  totalDonation: number;
+  publicSlug: string;
+}
+
+export interface StoreStats {
+  donors: { total: number; nikSynced: number; syncedLast24h: number };
+  fishByTier: Array<{ tierCode: TierCode; count: number }>;
+  donations: { confirmed: number; refunded: number };
+  webhooks: {
+    received: number;
+    processed: number;
+    duplicate: number;
+    failed: number;
+    last24h: number;
+  };
+  inventoryPoints: number;
+  /** 24 hourly buckets, oldest first; `hour` is the bucket start (ISO). */
+  hourlyEvents: Array<{ hour: string; count: number }>;
+  recentEvents: Array<{
+    id: number;
+    eventType: string;
+    tierCode: string | null;
+    publicSlug: string;
+    createdAt: string;
+  }>;
+}
 
 export interface WebhookProcessingResult {
   duplicate: boolean;
@@ -53,4 +93,12 @@ export interface AppStore {
     tokenHash: string,
     expiresAt: Date | null,
   ): Promise<IssuedAccessToken>;
+  issueAccessTokenForDonor(
+    donorId: string,
+    tokenHash: string,
+    expiresAt: Date | null,
+  ): Promise<IssuedAccessToken>;
+  syncDonor(input: DonorSyncInput, now: Date): Promise<SyncedDonor>;
+  getInventory(donorId: string): Promise<Inventory>;
+  getStats(now: Date): Promise<StoreStats>;
 }

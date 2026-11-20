@@ -5,6 +5,7 @@ import type {
   BigAquarium,
   EndowmentWebhook,
   GameEventsPage,
+  Inventory,
   PersonalAquarium,
   PersonalFish,
   PublicAquarium,
@@ -25,17 +26,25 @@ import type {
   AppStore,
   AppearanceResult,
   AuthenticatedToken,
+  DonorSyncInput,
   FeedFishResult,
   IssuedAccessToken,
+  StoreStats,
+  SyncedDonor,
   WebhookProcessingResult,
 } from './types.js';
+import { hourlyBuckets } from '../modules/dashboard/hourly-buckets.js';
 
 interface MemoryDonor {
   id: string;
-  externalId: string;
+  externalId: string | null;
+  nik: string | null;
   displayName: string | null;
   email: string | null;
   showNamePublicly: boolean;
+  totalDonation: bigint;
+  tierCode: string | null;
+  lastSyncedAt: Date | null;
 }
 
 interface MemoryAquarium {
@@ -56,7 +65,7 @@ interface MemoryDonation {
 interface MemoryFish {
   id: string;
   aquariumId: string;
-  donationId: string;
+  donationId: string | null;
   tierCode: string;
   speciesCode: string;
   colorCode: string;
@@ -82,8 +91,9 @@ export class MemoryStore implements AppStore {
   private readonly donations = new Map<string, MemoryDonation>();
   private readonly fish = new Map<string, MemoryFish>();
   private readonly events: MemoryEvent[] = [];
-  private readonly webhooks = new Set<string>();
+  private readonly webhooks = new Map<string, Date>();
   private readonly tokens = new Map<string, { donorId: string; expiresAt: Date | null }>();
+  private readonly inventories = new Map<string, { points: number; ownedAccessories: string[] }>();
   private nextEventId = 1;
 
   public async close(): Promise<void> {}
@@ -152,7 +162,7 @@ export class MemoryStore implements AppStore {
 
   public async processWebhook(event: EndowmentWebhook): Promise<WebhookProcessingResult> {
     if (this.webhooks.has(event.eventId)) return { duplicate: true };
-    this.webhooks.add(event.eventId);
+    this.webhooks.set(event.eventId, new Date());
     if (event.eventType === 'donation.confirmed') {
       const donationKey = event.data.donationId;
       if (this.donations.has(donationKey)) return { duplicate: true };
@@ -171,9 +181,13 @@ export class MemoryStore implements AppStore {
         donor = {
           id: randomUUID(),
           externalId: event.data.donor.externalId,
+          nik: null,
           displayName: event.data.donor.name,
           email: event.data.donor.email,
           showNamePublicly: event.data.donor.showName,
+          totalDonation: 0n,
+          tierCode: null,
+          lastSyncedAt: null,
         };
         this.donors.set(donor.id, donor);
       } else {
@@ -337,8 +351,170 @@ export class MemoryStore implements AppStore {
   ): Promise<IssuedAccessToken> {
     const donor = [...this.donors.values()].find((item) => item.externalId === donorExternalId);
     if (!donor) throw new AppError(404, 'DONOR_NOT_FOUND', 'Donor tidak ditemukan');
-    this.tokens.set(tokenHash, { donorId: donor.id, expiresAt });
-    return { donorId: donor.id, expiresAt };
+    return this.issueAccessTokenForDonor(donor.id, tokenHash, expiresAt);
+  }
+
+  public async issueAccessTokenForDonor(
+    donorId: string,
+    tokenHash: string,
+    expiresAt: Date | null,
+  ): Promise<IssuedAccessToken> {
+    this.tokens.set(tokenHash, { donorId, expiresAt });
+    return { donorId, expiresAt };
+  }
+
+  public async syncDonor(input: DonorSyncInput, now: Date): Promise<SyncedDonor> {
+    const tier = resolveTier(
+      BigInt(input.totalDonation),
+      tierSeed.map((item) => ({ ...item })),
+    );
+    let donor = [...this.donors.values()].find(
+      (item) => item.nik === input.nik || item.externalId === input.nik,
+    );
+    if (donor) {
+      donor.nik = input.nik;
+      donor.displayName = input.name;
+      donor.totalDonation = BigInt(input.totalDonation);
+      donor.tierCode = tier?.code ?? null;
+      donor.lastSyncedAt = now;
+    } else {
+      donor = {
+        id: randomUUID(),
+        externalId: input.nik,
+        nik: input.nik,
+        displayName: input.name,
+        email: null,
+        showNamePublicly: true,
+        totalDonation: BigInt(input.totalDonation),
+        tierCode: tier?.code ?? null,
+        lastSyncedAt: now,
+      };
+      this.donors.set(donor.id, donor);
+    }
+
+    let aquarium = this.aquariums.get(donor.id);
+    if (!aquarium) {
+      aquarium = {
+        id: randomUUID(),
+        donorId: donor.id,
+        publicSlug: `aqr-${randomUUID().slice(0, 8)}`,
+        name: null,
+      };
+      this.aquariums.set(donor.id, aquarium);
+    }
+
+    const inventory = this.inventories.get(donor.id) ?? { points: 0, ownedAccessories: [] };
+    inventory.points = Math.max(
+      inventory.points,
+      Math.min(2_147_483_647, Math.floor(input.totalDonation / 10_000)),
+    );
+    this.inventories.set(donor.id, inventory);
+
+    const active = this.aquariumFish(aquarium.id, false)[0];
+    if (tier) {
+      const species = speciesSeed.find((item) => item.defaultTierCode === tier.code);
+      if (!species) throw new AppError(500, 'SPECIES_NOT_CONFIGURED', 'Species belum tersedia');
+      if (!active) {
+        const fish: MemoryFish = {
+          id: randomUUID(),
+          aquariumId: aquarium.id,
+          donationId: null,
+          tierCode: tier.code,
+          speciesCode: species.code,
+          colorCode: 'DEFAULT',
+          accessoryCode: 'NONE',
+          hunger: 100,
+          lastFedAt: null,
+          isActive: true,
+          createdAt: now,
+        };
+        this.fish.set(fish.id, fish);
+        this.addEvent(aquarium.id, fish.id, 'fish.created', {
+          tierCode: tier.code,
+          speciesCode: species.code,
+          source: 'endowment.sync',
+        });
+      } else if (active.tierCode !== tier.code) {
+        active.tierCode = tier.code;
+        active.speciesCode = species.code;
+        this.addEvent(aquarium.id, active.id, 'fish.tier_changed', {
+          tierCode: tier.code,
+          speciesCode: species.code,
+          source: 'endowment.sync',
+        });
+      }
+    } else if (active) {
+      active.isActive = false;
+      this.addEvent(aquarium.id, active.id, 'fish.deactivated', {
+        reason: 'endowment.total_below_common',
+      });
+    }
+
+    return {
+      donorId: donor.id,
+      nik: input.nik,
+      name: input.name,
+      tierCode: tier ? tierCodeSchema.parse(tier.code) : null,
+      totalDonation: input.totalDonation,
+      publicSlug: aquarium.publicSlug,
+    };
+  }
+
+  public async getStats(now: Date): Promise<StoreStats> {
+    const dayAgo = now.getTime() - 24 * 60 * 60 * 1000;
+    const donors = [...this.donors.values()];
+    const activeFish = [...this.fish.values()].filter((item) => item.isActive);
+    const donations = [...this.donations.values()];
+    const webhookTimes = [...this.webhooks.values()];
+    const slugByAquarium = new Map(
+      [...this.aquariums.values()].map((item) => [item.id, item.publicSlug]),
+    );
+    const tierByFish = new Map([...this.fish.values()].map((item) => [item.id, item.tierCode]));
+    return {
+      donors: {
+        total: donors.length,
+        nikSynced: donors.filter((item) => item.nik !== null).length,
+        syncedLast24h: donors.filter(
+          (item) => item.lastSyncedAt !== null && item.lastSyncedAt.getTime() >= dayAgo,
+        ).length,
+      },
+      fishByTier: tierSeed.map((tier) => ({
+        tierCode: tierCodeSchema.parse(tier.code),
+        count: activeFish.filter((item) => item.tierCode === tier.code).length,
+      })),
+      donations: {
+        confirmed: donations.filter((item) => item.status === 'confirmed').length,
+        refunded: donations.filter((item) => item.status === 'refunded').length,
+      },
+      webhooks: {
+        received: 0,
+        processed: webhookTimes.length,
+        duplicate: 0,
+        failed: 0,
+        last24h: webhookTimes.filter((time) => time.getTime() >= dayAgo).length,
+      },
+      inventoryPoints: [...this.inventories.values()].reduce((sum, item) => sum + item.points, 0),
+      hourlyEvents: hourlyBuckets(
+        now,
+        this.events.map((event) => event.createdAt),
+      ),
+      recentEvents: this.events
+        .slice(-12)
+        .reverse()
+        .map((event) => ({
+          id: event.id,
+          eventType: event.eventType,
+          tierCode: event.fishId ? (tierByFish.get(event.fishId) ?? null) : null,
+          publicSlug: slugByAquarium.get(event.aquariumId) ?? '',
+          createdAt: event.createdAt.toISOString(),
+        })),
+    };
+  }
+
+  public async getInventory(donorId: string): Promise<Inventory> {
+    const inventory = this.inventories.get(donorId) ?? { points: 0, ownedAccessories: [] };
+    this.inventories.set(donorId, inventory);
+    return { points: inventory.points, ownedAccessories: [...inventory.ownedAccessories] };
   }
 
   public async feedFish(donorId: string, fishId: string, now: Date): Promise<FeedFishResult> {
