@@ -4,6 +4,7 @@ import { createApp } from '../../app.js';
 import { createDatabaseConnection } from '../../db/client.js';
 import { createWebhookSignature } from '../../modules/webhooks/signature-service.js';
 import { AppError } from '../../shared/errors.js';
+import { runCleanup } from '../../modules/maintenance/cleanup.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const integration = testDatabaseUrl ? describe : describe.skip;
@@ -22,7 +23,7 @@ integration('PostgreSQL integration (isolated TEST_DATABASE_URL only)', () => {
     if (!testDatabaseUrl) return;
     connection = createDatabaseConnection(testDatabaseUrl);
     await connection.sql`
-      truncate table admin_audit_log, game_events, access_tokens, player_inventory, fish, donations, webhook_events, aquariums, donors restart identity cascade
+      truncate table endowment_lookups, admin_audit_log, game_events, access_tokens, player_inventory, fish, donations, webhook_events, aquariums, donors restart identity cascade
     `;
     app = await createApp({
       config: {
@@ -350,6 +351,118 @@ integration('PostgreSQL integration (isolated TEST_DATABASE_URL only)', () => {
       });
       expect(detail.json().data.inventory.ownedAccessories).toEqual(['GRADUATION_HAT']);
       expect(detail.json().data.fish.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('reactivates with a Unity-compatible event, exposes fish history, and exports CSV', async () => {
+      const list = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/fish?status=inactive',
+        headers,
+      });
+      const fishId = list.json().data.items[0].id as string;
+      const reactivated = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+        payload: { isActive: true, reason: 'restored' },
+      });
+      expect(reactivated.json().data.isActive).toBe(true);
+
+      const history = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/fish/${fishId}/history`,
+        headers,
+      });
+      const items = history.json().data.items as Array<{
+        kind: string;
+        type: string;
+        details: Record<string, unknown>;
+        reason: string | null;
+      }>;
+      expect(items[0]?.kind === 'admin' || items[0]?.kind === 'game-event').toBe(true);
+      const respawn = items.find((item) => item.kind === 'game-event' && item.details.reactivated);
+      expect(respawn?.type).toBe('fish.created');
+      expect(items.some((item) => item.kind === 'admin' && item.reason === 'restored')).toBe(true);
+
+      const csv = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/export/fish.csv',
+        headers,
+      });
+      expect(csv.statusCode).toBe(200);
+      expect(csv.headers['content-type']).toContain('text/csv');
+      expect(csv.headers['content-disposition']).toMatch(/attachment; filename="aquarium-fish-/);
+      expect(csv.body).toContain(fishId);
+      const donorsCsv = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/export/donors.csv',
+        headers,
+      });
+      expect(donorsCsv.body).not.toContain('3171010101017777');
+      expect(donorsCsv.body).toContain('3171••••••••7777');
+      const exportsAudit = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/audit?targetType=export',
+        headers,
+      });
+      expect(
+        exportsAudit.json().data.items.map((entry: { action: string }) => entry.action),
+      ).toEqual(['export.donors', 'export.fish']);
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/v1/admin/export/secrets.csv', headers }))
+          .statusCode,
+      ).toBe(400);
+    });
+
+    it('persists Endowment lookup history across app restarts', async () => {
+      const rows = await connection.sql<{ count: number }[]>`
+        select count(*)::int as count from endowment_lookups`;
+      expect(rows[0]?.count).toBeGreaterThan(0);
+      const restarted = await createApp({
+        config: {
+          nodeEnv: 'test',
+          logLevel: 'silent',
+          port: 3000,
+          databaseUrl: testDatabaseUrl!,
+          webhookSecret: secret,
+          endowmentApiBaseUrl: 'http://127.0.0.1:4100',
+          endowmentApiTicket: 'test-endowment-ticket',
+          endowmentApiTimeoutMs: 2_000,
+          webhookTimestampToleranceSeconds: 300,
+          corsOrigins: [],
+          adminDashboardToken: 'integration-admin-token-0123456789abcdef',
+        },
+      });
+      try {
+        const stats = await restarted.inject({
+          method: 'GET',
+          url: '/api/v1/admin/stats',
+          headers,
+        });
+        const endowment = stats.json().data.endowment;
+        expect(endowment.totals.ok).toBe(rows[0]?.count);
+        expect(endowment.recent.length).toBeGreaterThan(0);
+        expect(JSON.stringify(endowment)).not.toContain('3171010101017777');
+      } finally {
+        await restarted.close();
+      }
+    });
+
+    it('cleans up expired tokens and old lookup rows but keeps current data', async () => {
+      const donorRows = await connection.sql<{ id: string }[]>`select id from donors limit 1`;
+      const donorId = donorRows[0]!.id;
+      await connection.sql`
+        insert into access_tokens (donor_id, token_hash, expires_at)
+        values (${donorId}::uuid, 'cleanup-old', now() - interval '30 days'),
+               (${donorId}::uuid, 'cleanup-fresh', now() + interval '1 day')`;
+      await connection.sql`
+        insert into endowment_lookups (outcome, latency_ms, created_at)
+        values ('ok', 5, now() - interval '120 days')`;
+      const removed = await runCleanup(connection.sql, new Date());
+      expect(removed).toEqual({ accessTokens: 1, endowmentLookups: 1 });
+      const remaining = await connection.sql<{ token_hash: string }[]>`
+        select token_hash from access_tokens where token_hash like 'cleanup-%'`;
+      expect(remaining.map((row) => row.token_hash)).toEqual(['cleanup-fresh']);
     });
   });
 });

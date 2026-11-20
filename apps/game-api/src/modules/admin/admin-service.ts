@@ -269,10 +269,16 @@ export class AdminService {
           tx,
           aquariumId,
           id,
-          after.isActive ? 'fish.reactivated' : 'fish.deactivated',
-          {
-            reason: 'admin',
-          },
+          // Reactivation reuses fish.created so existing Unity clients re-spawn the fish.
+          after.isActive ? 'fish.created' : 'fish.deactivated',
+          after.isActive
+            ? {
+                tierCode: after.tierCode,
+                speciesCode: after.species.code,
+                source: 'admin',
+                reactivated: true,
+              }
+            : { reason: 'admin' },
         );
       }
       if (changes.tierCode || changes.speciesCode) {
@@ -299,6 +305,53 @@ export class AdminService {
       await this.audit(tx, actor, 'fish.update', 'fish', id, changes, input.reason);
       return after;
     });
+  }
+
+  /** Game events and admin audit entries for one fish, newest first. */
+  public async fishHistory(id: string, limit = 50) {
+    await this.getFish(id, new Date());
+    const [events, audit] = await Promise.all([
+      this.sql<
+        {
+          id: string;
+          event_type: string;
+          payload: Record<string, unknown> | string;
+          created_at: Date | string;
+        }[]
+      >`select id::text as id, event_type, payload, created_at from game_events
+        where fish_id = ${id}::uuid order by game_events.id desc limit ${limit}`,
+      this.sql<
+        {
+          id: string;
+          action: string;
+          changes: Record<string, unknown> | string;
+          reason: string | null;
+          created_at: Date | string;
+        }[]
+      >`select id::text as id, action, changes, reason, created_at from admin_audit_log
+        where target_type = 'fish' and target_id = ${id}
+        order by admin_audit_log.id desc limit ${limit}`,
+    ]);
+    const parse = (value: Record<string, unknown> | string) =>
+      typeof value === 'string' ? (JSON.parse(value) as Record<string, unknown>) : value;
+    return [
+      ...events.map((row) => ({
+        kind: 'game-event' as const,
+        type: row.event_type,
+        details: parse(row.payload),
+        reason: null,
+        at: iso(row.created_at) ?? '',
+      })),
+      ...audit.map((row) => ({
+        kind: 'admin' as const,
+        type: row.action,
+        details: parse(row.changes),
+        reason: row.reason,
+        at: iso(row.created_at) ?? '',
+      })),
+    ]
+      .sort((left, right) => right.at.localeCompare(left.at))
+      .slice(0, limit);
   }
 
   // ----------------------------------------------------------------- donors

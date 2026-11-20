@@ -123,6 +123,36 @@
     return payload.data;
   }
 
+  /** Fetches an export with the admin header and saves it via a temporary object URL. */
+  async function downloadExport(kind, button) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Exporting…';
+    try {
+      const token = window.AquariumDashboard.token();
+      const response = await fetch(`/api/v1/admin/export/${kind}`, {
+        headers: { 'x-admin-token': token },
+        cache: 'no-store',
+      });
+      if (response.status === 401) return window.AquariumDashboard.unauthorized();
+      if (!response.ok) throw new Error(`Export failed (${response.status})`);
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const url = URL.createObjectURL(await response.blob());
+      const link = el('a', { href: url, download: match ? match[1] : kind });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Export downloaded (recorded in the audit log)');
+    } catch (error) {
+      toast(error.message, 'critical');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
   async function loadCatalog() {
     if (!catalog) catalog = await api('GET', '/catalog');
     return catalog;
@@ -503,11 +533,19 @@
               text: 'Every fish in every aquarium. Click a row to edit it.',
             }),
           ]),
-          el('button', {
-            type: 'button',
-            text: 'New fish',
-            onclick: () => openFishCreator(null, refresh),
-          }),
+          el('div', { className: 'actions' }, [
+            el('button', {
+              type: 'button',
+              className: 'ghost',
+              text: 'Export CSV',
+              onclick: (event) => downloadExport('fish.csv', event.currentTarget),
+            }),
+            el('button', {
+              type: 'button',
+              text: 'New fish',
+              onclick: () => openFishCreator(null, refresh),
+            }),
+          ]),
         ]),
         el('div', { className: 'filters' }, [searchInput, tierSelect, speciesSelect, statusSelect]),
         results,
@@ -649,7 +687,52 @@
       });
     });
 
-    openDrawer(fish.displayName || `${fish.species.name} · ${shortId(fish.id)}`, form);
+    const historyList = el('ol', { className: 'timeline' }, [
+      el('li', { className: 'muted', text: 'Loading history…' }),
+    ]);
+    api('GET', `/fish/${fish.id}/history`)
+      .then(({ items }) => {
+        historyList.replaceChildren(
+          ...(items.length
+            ? items.map((item) =>
+                el('li', { className: item.kind === 'admin' ? 'is-admin' : '' }, [
+                  el('div', { className: 'timeline-head' }, [
+                    el('strong', { className: 'mono', text: item.type }),
+                    el('span', {
+                      className: 'muted',
+                      title: dateTime.format(new Date(item.at)),
+                      text: relative(item.at),
+                    }),
+                  ]),
+                  el('div', {
+                    className: 'muted',
+                    text:
+                      item.kind === 'admin'
+                        ? `Admin · ${describeChanges(item.details)}`
+                        : describeChanges(item.details),
+                  }),
+                  item.reason
+                    ? el('div', { className: 'muted', text: `Reason: ${item.reason}` })
+                    : null,
+                ]),
+              )
+            : [el('li', { className: 'muted', text: 'No history yet.' })]),
+        );
+      })
+      .catch((err) =>
+        historyList.replaceChildren(el('li', { className: 'error', text: err.message })),
+      );
+
+    openDrawer(
+      fish.displayName || `${fish.species.name} · ${shortId(fish.id)}`,
+      el('div', {}, [
+        form,
+        el('section', { className: 'section history' }, [
+          el('h3', { text: 'History' }),
+          historyList,
+        ]),
+      ]),
+    );
   }
 
   async function openFishCreator(presetDonor, onSaved) {
@@ -886,6 +969,12 @@
               text: 'Donors cached from Endowment and webhooks. NIKs are masked; search with a full NIK to find one.',
             }),
           ]),
+          el('button', {
+            type: 'button',
+            className: 'ghost',
+            text: 'Export CSV',
+            onclick: (event) => downloadExport('donors.csv', event.currentTarget),
+          }),
         ]),
         el('div', { className: 'filters' }, [searchInput, sourceSelect]),
         results,
@@ -1172,6 +1261,7 @@
         ['fish', 'Fish'],
         ['donor', 'Donors'],
         ['inventory', 'Inventory'],
+        ['export', 'Exports'],
       ],
       auditState.targetType,
       { 'aria-label': 'Target type' },
@@ -1192,15 +1282,17 @@
             }),
             el('td', { className: 'mono', text: entry.action }),
             el('td', {}, [
-              el('button', {
-                type: 'button',
-                className: 'link',
-                text: `${entry.targetType} ${shortId(entry.targetId)}`,
-                onclick: () =>
-                  entry.targetType === 'fish'
-                    ? openFishEditor(entry.targetId, refresh)
-                    : openDonorPanel(entry.targetId),
-              }),
+              entry.targetType === 'export'
+                ? el('span', { className: 'mono', text: entry.targetId })
+                : el('button', {
+                    type: 'button',
+                    className: 'link',
+                    text: `${entry.targetType} ${shortId(entry.targetId)}`,
+                    onclick: () =>
+                      entry.targetType === 'fish'
+                        ? openFishEditor(entry.targetId, refresh)
+                        : openDonorPanel(entry.targetId),
+                  }),
             ]),
             el('td', { className: 'wrap', text: describeChanges(entry.changes) }),
             el('td', { className: 'wrap', text: entry.reason || '—' }),

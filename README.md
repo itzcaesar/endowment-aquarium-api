@@ -137,6 +137,19 @@ event terbaru tanpa data pribadi (NIK, nama, dan email tidak pernah ditampilkan)
 `GET /api/v1/admin/stats` yang mewajibkan header `X-Admin-Token` sesuai `ADMIN_DASHBOARD_TOKEN`;
 jika variabel itu kosong, endpoint mengembalikan `503 DASHBOARD_DISABLED`.
 
+Tab **Fish**, **Donors**, dan **Audit log** dipakai untuk mengelola data: membuat/mengubah/menonaktifkan
+ikan, mengubah profil donor, menyesuaikan poin dan aksesoris inventory, sinkron ulang dari Endowment,
+melihat riwayat per ikan, serta ekspor CSV. Setiap perubahan dan ekspor tercatat di
+`admin_audit_log`. Perubahan ikan juga menghasilkan game event yang sudah dikenal client Unity.
+
+## Operasional server
+
+- `deploy/backup.sh`: `pg_dump` terverifikasi, simpan 14 hari di `~/backups` (cron 03:15).
+- `deploy/healthcheck.sh`: watchdog tiap 5 menit; restart API setelah dua kegagalan berturut-turut,
+  log ke journal (`journalctl -t endowment-health`).
+- `npm run db:cleanup`: hapus access token kedaluwarsa (>7 hari) dan metrik lookup Endowment
+  (>90 hari). Game event dan audit log tidak dihapus.
+
 ## Akses personal khusus development
 
 Setelah data donatur tersedia, misalnya setelah running mock scenario, buat token yang berlaku

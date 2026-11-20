@@ -37,6 +37,7 @@ import {
   InstrumentedDonorDirectory,
   type DonorDirectory,
 } from './modules/endowment/donor-directory.js';
+import { PostgresLookupHistory } from './modules/endowment/lookup-history.js';
 import { verifyWebhookSignature } from './modules/webhooks/signature-service.js';
 import { AppError, safeErrorCode } from './shared/errors.js';
 import { errorEnvelope, successEnvelope } from './shared/envelope.js';
@@ -118,7 +119,15 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         timeoutMs: options.config.endowmentApiTimeoutMs,
       }),
     new URL(options.config.endowmentApiBaseUrl).host,
+    100,
+    connection ? new PostgresLookupHistory(connection.sql) : null,
+    (error) => app.log.warn({ err: error }, 'Failed to persist Endowment lookup metric'),
   );
+  try {
+    await donorDirectory.hydrate();
+  } catch (error) {
+    app.log.warn({ err: error }, 'Could not restore Endowment lookup history');
+  }
   const errorResponseSchema = jsonSchema(errorEnvelopeSchema);
 
   await app.register(cors, {
