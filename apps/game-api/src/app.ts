@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 
 import {
   appearanceInputSchema,
+  authNikDataSchema,
+  authNikInputSchema,
   bigAquariumQuerySchema,
   bigAquariumSchema,
-  errorEnvelopeSchema,
   endowmentWebhookSchema,
+  errorEnvelopeSchema,
   eventsQuerySchema,
   gameEventsPageSchema,
+  inventorySchema,
   personalAquariumSchema,
   personalFishSchema,
   publicAquariumSchema,
@@ -26,7 +29,15 @@ import { createDatabaseConnection } from './db/client.js';
 import { documentedResponse, errorExamples, responseExamples } from './openapi/examples.js';
 import { PostgresStore } from './store/postgres-store.js';
 import type { AppStore } from './store/types.js';
-import { hashAccessToken, bearerToken } from './modules/auth/token-service.js';
+import { hashAccessToken, bearerToken, generateAccessToken } from './modules/auth/token-service.js';
+import { registerAdminRoutes } from './modules/admin/admin-routes.js';
+import { registerDashboard } from './modules/dashboard/dashboard-routes.js';
+import {
+  HttpDonorDirectory,
+  InstrumentedDonorDirectory,
+  type DonorDirectory,
+} from './modules/endowment/donor-directory.js';
+import { PostgresLookupHistory } from './modules/endowment/lookup-history.js';
 import { verifyWebhookSignature } from './modules/webhooks/signature-service.js';
 import { AppError, safeErrorCode } from './shared/errors.js';
 import { errorEnvelope, successEnvelope } from './shared/envelope.js';
@@ -35,6 +46,7 @@ import { jsonSchema, parseInput } from './shared/validation.js';
 interface AppOptions {
   config: GameApiConfig;
   store?: AppStore;
+  donorDirectory?: DonorDirectory;
 }
 
 const healthDataSchema = z.object({ status: z.literal('ok') });
@@ -77,8 +89,14 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
       level: options.config.logLevel,
-      redact: ['req.headers.authorization', 'req.headers.x-endowment-signature'],
+      redact: [
+        'req.headers.authorization',
+        'req.headers.x-endowment-signature',
+        'req.headers["x-admin-token"]',
+      ],
     },
+    // Only the local nginx reverse proxy may set X-Forwarded-For (keeps rate limits per real client).
+    trustProxy: ['127.0.0.1', '::1'],
     bodyLimit: 1_048_576,
     genReqId: (request) => {
       const supplied = request.headers['x-request-id'];
@@ -93,6 +111,23 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
 
   const connection = options.store ? null : createDatabaseConnection(options.config.databaseUrl);
   const store = options.store ?? new PostgresStore(connection!);
+  const donorDirectory = new InstrumentedDonorDirectory(
+    options.donorDirectory ??
+      new HttpDonorDirectory({
+        baseUrl: options.config.endowmentApiBaseUrl,
+        ticket: options.config.endowmentApiTicket,
+        timeoutMs: options.config.endowmentApiTimeoutMs,
+      }),
+    new URL(options.config.endowmentApiBaseUrl).host,
+    100,
+    connection ? new PostgresLookupHistory(connection.sql) : null,
+    (error) => app.log.warn({ err: error }, 'Failed to persist Endowment lookup metric'),
+  );
+  try {
+    await donorDirectory.hydrate();
+  } catch (error) {
+    app.log.warn({ err: error }, 'Could not restore Endowment lookup history');
+  }
   const errorResponseSchema = jsonSchema(errorEnvelopeSchema);
 
   await app.register(cors, {
@@ -107,7 +142,6 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(rateLimit, {
     max: 100,
     timeWindow: '1 minute',
-    allowList: ['127.0.0.1', '::1'],
   });
   await app.register(rawBody, {
     field: 'rawBody',
@@ -202,6 +236,18 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
 
   app.get('/openapi.json', async () => app.swagger());
 
+  await registerDashboard(app, {
+    store,
+    donorDirectory,
+    adminToken: options.config.adminDashboardToken,
+  });
+  await registerAdminRoutes(app, {
+    sql: connection?.sql ?? null,
+    store,
+    donorDirectory,
+    adminToken: options.config.adminDashboardToken,
+  });
+
   app.get(
     '/api/v1/health',
     {
@@ -274,6 +320,73 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
         expiresAt: authenticated.expiresAt?.toISOString() ?? null,
       });
     },
+  );
+
+  app.post(
+    '/api/v1/auth/nik',
+    {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      schema: {
+        tags: ['auth'],
+        body: jsonSchema(authNikInputSchema),
+        response: {
+          200: documentedResponse(
+            successEnvelopeSchema(authNikDataSchema),
+            responseExamples.authNik,
+            'The donor is looked up from the Endowment API by NIK, cached locally, and issued a GAME API bearer token.',
+          ),
+          400: documentedResponse(errorEnvelopeSchema, errorExamples.validation),
+          404: documentedResponse(errorEnvelopeSchema, errorExamples.donorNotFound),
+          502: documentedResponse(errorEnvelopeSchema, errorExamples.endowmentAuthFailed),
+          503: documentedResponse(errorEnvelopeSchema, errorExamples.endowmentUnavailable),
+        },
+      },
+    },
+    async (request) => {
+      const { nik } = parseInput(authNikInputSchema, request.body);
+      const donor = await donorDirectory.findByNik(nik);
+      const synced = await store.syncDonor(donor, new Date());
+      const rawToken = generateAccessToken();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await store.issueAccessTokenForDonor(synced.donorId, hashAccessToken(rawToken), expiresAt);
+      return successEnvelope(request.id, {
+        accessToken: rawToken,
+        tokenType: 'Bearer',
+        expiresAt: expiresAt.toISOString(),
+        donor: {
+          nik: synced.nik,
+          name: synced.name,
+          tierCode: synced.tierCode,
+          totalDonation: synced.totalDonation,
+        },
+      });
+    },
+  );
+
+  app.get(
+    '/api/v1/me/inventory',
+    {
+      schema: {
+        tags: ['inventory'],
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: documentedResponse(
+            successEnvelopeSchema(inventorySchema),
+            responseExamples.inventory,
+            'Points and accessories owned by the authenticated donor.',
+          ),
+          401: documentedResponse(errorEnvelopeSchema, [
+            ...errorExamples.authenticationRequired,
+            ...errorExamples.invalidToken,
+          ]),
+        },
+      },
+    },
+    async (request) =>
+      successEnvelope(
+        request.id,
+        await store.getInventory(await authenticatedDonor(request, store)),
+      ),
   );
 
   app.get(
@@ -445,7 +558,8 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   app.post(
     '/webhooks/v1/endowment',
     {
-      config: { rawBody: true },
+      // HMAC-authenticated server-to-server traffic: bursts (campaigns, replays) must not get 429s.
+      config: { rawBody: true, rateLimit: false },
       schema: {
         tags: ['webhooks'],
         headers: {

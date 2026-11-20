@@ -15,6 +15,7 @@ const environmentSchema = z.object({
   MOCK_API_PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   GAME_API_WEBHOOK_URL: z.url().startsWith('http'),
   ENDOWMENT_WEBHOOK_SECRET: z.string().min(16),
+  ENDOWMENT_API_TICKET: z.string().min(1),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:8080'),
 });
 
@@ -24,6 +25,7 @@ export interface MockApiConfig {
   port: number;
   webhookUrl: string;
   webhookSecret: string;
+  endowmentApiTicket: string;
   corsOrigins: string[];
 }
 
@@ -37,6 +39,7 @@ export function readMockApiConfig(environment: NodeJS.ProcessEnv = process.env):
     port: result.data.MOCK_API_PORT,
     webhookUrl: result.data.GAME_API_WEBHOOK_URL,
     webhookSecret: result.data.ENDOWMENT_WEBHOOK_SECRET,
+    endowmentApiTicket: result.data.ENDOWMENT_API_TICKET,
     corsOrigins: result.data.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())
       .filter(Boolean),

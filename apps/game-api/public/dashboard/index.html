@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Aquarium Middleware</title>
+    <link rel="stylesheet" href="/dashboard/dashboard.css" />
+    <script src="/dashboard/dashboard.js" defer></script>
+    <script src="/dashboard/admin.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Aquarium Middleware</h1>
+          <p class="muted">Endowment API &rarr; Game API &rarr; Unity client</p>
+        </div>
+      </div>
+      <div class="controls" id="controls" hidden>
+        <span class="muted" id="updated" aria-live="polite">Loading&hellip;</span>
+        <label class="toggle">
+          <input type="checkbox" id="auto-refresh" checked />
+          Auto-refresh 30s
+        </label>
+        <button type="button" id="refresh">Refresh</button>
+        <button type="button" id="sign-out" class="ghost">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="gate" class="gate" hidden>
+        <form id="gate-form" class="card gate-card">
+          <h2>Operations dashboard</h2>
+          <p class="muted">
+            Enter the admin dashboard token (<code>ADMIN_DASHBOARD_TOKEN</code>). It is kept only
+            for this browser tab.
+          </p>
+          <label for="token">Admin token</label>
+          <input id="token" type="password" autocomplete="off" required minlength="32" />
+          <p id="gate-error" class="error" role="alert"></p>
+          <button type="submit">Open dashboard</button>
+        </form>
+      </section>
+
+      <div id="app" hidden>
+        <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+          <button type="button" role="tab" data-view="overview" aria-selected="true">
+            Overview
+          </button>
+          <button type="button" role="tab" data-view="fish" aria-selected="false">Fish</button>
+          <button type="button" role="tab" data-view="donors" aria-selected="false">Donors</button>
+          <button type="button" role="tab" data-view="audit" aria-selected="false">
+            Audit log
+          </button>
+        </nav>
+
+        <div id="view-overview" role="tabpanel">
+          <p id="banner" class="banner" role="alert" hidden></p>
+
+          <section aria-labelledby="health-title">
+            <h2 id="health-title" class="section-title">Service health</h2>
+            <div class="grid health">
+              <article class="card status-card" id="health-api"></article>
+              <article class="card status-card" id="health-db"></article>
+              <article class="card status-card" id="health-endowment"></article>
+            </div>
+          </section>
+
+          <section aria-labelledby="kpi-title">
+            <h2 id="kpi-title" class="section-title">At a glance</h2>
+            <div class="grid kpis" id="kpis"></div>
+          </section>
+
+          <section class="grid two">
+            <article class="card">
+              <header class="card-head">
+                <div>
+                  <h3>Game activity</h3>
+                  <p class="muted">Game events per hour, last 24 hours</p>
+                </div>
+                <button type="button" class="ghost small" data-table-toggle="activity">
+                  Show table
+                </button>
+              </header>
+              <div class="chart" id="activity-chart"></div>
+              <div class="table-wrap" id="activity-table" hidden></div>
+            </article>
+
+            <article class="card">
+              <header class="card-head">
+                <div>
+                  <h3>Active fish by tier</h3>
+                  <p class="muted">Tier follows each donor&rsquo;s total donation</p>
+                </div>
+                <button type="button" class="ghost small" data-table-toggle="tiers">
+                  Show table
+                </button>
+              </header>
+              <div class="chart" id="tiers-chart"></div>
+              <div class="table-wrap" id="tiers-table" hidden></div>
+            </article>
+          </section>
+
+          <section class="grid two">
+            <article class="card">
+              <header class="card-head">
+                <div>
+                  <h3>Endowment lookups</h3>
+                  <p class="muted" id="lookup-sub">
+                    Server-to-server NIK lookups (kept for 90 days, survives restarts)
+                  </p>
+                </div>
+              </header>
+              <div class="mini-stats" id="lookup-stats"></div>
+              <div class="table-wrap" id="lookup-table"></div>
+            </article>
+
+            <article class="card">
+              <header class="card-head">
+                <div>
+                  <h3>Webhook pipeline</h3>
+                  <p class="muted">Signed donation webhooks by processing state</p>
+                </div>
+              </header>
+              <div id="webhook-bar"></div>
+              <ul class="legend" id="webhook-legend"></ul>
+              <h4 class="sub-title">Donations recorded from webhooks</h4>
+              <div class="mini-stats" id="donation-stats"></div>
+            </article>
+          </section>
+
+          <section>
+            <article class="card">
+              <header class="card-head">
+                <div>
+                  <h3>Recent game events</h3>
+                  <p class="muted">Latest 12 events across all aquariums (no personal data)</p>
+                </div>
+              </header>
+              <div class="table-wrap" id="events-table"></div>
+            </article>
+          </section>
+        </div>
+
+        <div id="view-fish" role="tabpanel" hidden></div>
+        <div id="view-donors" role="tabpanel" hidden></div>
+        <div id="view-audit" role="tabpanel" hidden></div>
+      </div>
+    </main>
+
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <aside
+      id="drawer"
+      class="drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="drawer-title"
+      hidden
+    >
+      <header class="drawer-head">
+        <h2 id="drawer-title"></h2>
+        <button type="button" class="ghost small" id="drawer-close" aria-label="Close panel">
+          Close
+        </button>
+      </header>
+      <div id="drawer-body" class="drawer-body"></div>
+    </aside>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="tooltip" class="tooltip" role="status" hidden></div>
+  </body>
+</html>

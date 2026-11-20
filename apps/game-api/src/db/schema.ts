@@ -41,9 +41,15 @@ const timestamps = {
 export const donors = pgTable('donors', {
   id: uuid('id').primaryKey().defaultRandom(),
   externalId: varchar('external_id', { length: 255 }).unique(),
+  nik: varchar('nik', { length: 20 }).unique(),
   displayName: varchar('display_name', { length: 150 }),
   email: varchar('email', { length: 255 }),
   showNamePublicly: boolean('show_name_publicly').notNull().default(false),
+  totalDonation: bigint('total_donation', { mode: 'bigint' })
+    .notNull()
+    .default(sql`0`),
+  tierCode: varchar('tier', { length: 30 }),
+  lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   ...timestamps,
 });
 
@@ -150,7 +156,6 @@ export const fish = pgTable(
       .notNull()
       .references(() => aquariums.id),
     donationId: uuid('donation_id')
-      .notNull()
       .unique()
       .references(() => donations.id),
     tierCode: varchar('tier_code', { length: 30 })
@@ -166,6 +171,10 @@ export const fish = pgTable(
     mood: fishMoodEnum('mood').notNull().default('happy'),
     lastFedAt: timestamp('last_fed_at', { withTimezone: true }),
     isActive: boolean('is_active').notNull().default(true),
+    /** donation (webhook), endowment_sync (NIK login) or admin. Sync only manages its own fish. */
+    source: varchar('source', { length: 20 }).notNull().default('donation'),
+    /** Why the fish is inactive: refund, admin, or endowment_below_common (sync may undo only the last). */
+    deactivatedReason: varchar('deactivated_reason', { length: 40 }),
     ...timestamps,
   },
   (table) => [
@@ -189,6 +198,24 @@ export const accessTokens = pgTable('access_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const playerInventory = pgTable(
+  'player_inventory',
+  {
+    donorId: uuid('donor_id')
+      .primaryKey()
+      .references(() => donors.id, { onDelete: 'cascade' }),
+    points: integer('points').notNull().default(0),
+    /** Points already granted from the donation total, so re-syncs only add the increase. */
+    donationPointsGranted: integer('donation_points_granted').notNull().default(0),
+    ownedAccessories: jsonb('owned_accessories')
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    ...timestamps,
+  },
+  (table) => [check('player_inventory_points_check', sql`${table.points} >= 0`)],
+);
+
 export const gameEvents = pgTable(
   'game_events',
   {
@@ -205,4 +232,36 @@ export const gameEvents = pgTable(
     index('game_events_aquarium_id_id_idx').on(table.aquariumId, table.id),
     index('game_events_event_type_created_at_idx').on(table.eventType, table.createdAt),
   ],
+);
+
+/** Append-only record of every change made through the admin dashboard. */
+export const adminAuditLog = pgTable(
+  'admin_audit_log',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    action: varchar('action', { length: 80 }).notNull(),
+    targetType: varchar('target_type', { length: 40 }).notNull(),
+    targetId: varchar('target_id', { length: 64 }).notNull(),
+    changes: jsonb('changes').$type<Record<string, unknown>>().notNull().default({}),
+    reason: varchar('reason', { length: 500 }),
+    actorIp: varchar('actor_ip', { length: 64 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('admin_audit_log_created_at_idx').on(table.createdAt),
+    index('admin_audit_log_target_idx').on(table.targetType, table.targetId),
+  ],
+);
+
+/** One row per server-to-server Endowment lookup (no NIK stored), for dashboard health history. */
+export const endowmentLookups = pgTable(
+  'endowment_lookups',
+  {
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    outcome: varchar('outcome', { length: 20 }).notNull(),
+    code: varchar('code', { length: 80 }),
+    latencyMs: integer('latency_ms').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('endowment_lookups_created_at_idx').on(table.createdAt)],
 );

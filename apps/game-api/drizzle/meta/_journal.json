@@ -8,6 +8,34 @@
       "when": 1784554844605,
       "tag": "0000_typical_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795175794097,
+      "tag": "0001_endowment_nik_inventory",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795178120492,
+      "tag": "0002_admin_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795179766500,
+      "tag": "0003_endowment_lookups",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795181250789,
+      "tag": "0004_sync_ownership",
+      "breakpoints": true
     }
   ]
 }
