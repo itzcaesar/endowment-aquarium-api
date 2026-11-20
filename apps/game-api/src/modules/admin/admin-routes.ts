@@ -33,6 +33,18 @@ const hidden = { schema: { hide: true } };
 // Writes get a tighter per-IP budget than the dashboard's read polling.
 const writeLimit = { ...hidden, config: { rateLimit: { max: 60, timeWindow: '1 minute' } } };
 
+/** Reads every page so exports are complete, not silently capped. */
+async function collectAll<T>(
+  fetchPage: (page: number) => Promise<{ items: T[]; pageCount: number }>,
+): Promise<T[]> {
+  const items: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await fetchPage(page);
+    items.push(...result.items);
+    if (page >= result.pageCount) return items;
+  }
+}
+
 export async function registerAdminRoutes(
   app: FastifyInstance,
   options: AdminRouteOptions,
@@ -100,7 +112,11 @@ export async function registerAdminRoutes(
     let csv: string;
     let count: number;
     if (kind === 'donors.csv') {
-      const page = await admin.listDonors({ page: 1, pageSize: 50_000, source: 'all' });
+      const page = {
+        items: await collectAll((p) =>
+          admin.listDonors({ page: p, pageSize: 1_000, source: 'all' }),
+        ),
+      };
       count = page.items.length;
       csv = toCsv(
         [
@@ -133,7 +149,12 @@ export async function registerAdminRoutes(
         ]),
       );
     } else {
-      const page = await admin.listFish({ page: 1, pageSize: 50_000, status: 'all' }, new Date());
+      const now = new Date();
+      const page = {
+        items: await collectAll((p) =>
+          admin.listFish({ page: p, pageSize: 1_000, status: 'all' }, now),
+        ),
+      };
       count = page.items.length;
       csv = toCsv(
         [

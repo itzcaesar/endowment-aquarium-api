@@ -39,6 +39,7 @@ type AppTransaction = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
 
 const SOURCE = 'endowment';
 const FEED_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+const MAX_POINTS = 2_147_483_647;
 
 interface FishRow {
   id: string;
@@ -353,32 +354,21 @@ export class PostgresStore implements AppStore {
         tierRows.map((row) => ({ ...row, code: tierCodeSchema.parse(row.code) })),
       );
 
-      const existingRows = await tx
-        .select({
-          id: schema.donors.id,
-          totalDonation: schema.donors.totalDonation,
-        })
-        .from(schema.donors)
-        .where(or(eq(schema.donors.nik, input.nik), eq(schema.donors.externalId, input.nik)))
-        .limit(1);
-      const existing = existingRows[0];
+      const findDonor = async () =>
+        (
+          await tx
+            .select({ id: schema.donors.id, tierCode: schema.donors.tierCode })
+            .from(schema.donors)
+            .where(or(eq(schema.donors.nik, input.nik), eq(schema.donors.externalId, input.nik)))
+            .limit(1)
+        )[0];
 
-      let donorId: string;
-      if (existing) {
-        donorId = existing.id;
+      // Insert-if-missing is idempotent: a concurrent first login for the same NIK waits on the
+      // unique index, does nothing, and then reads the row the other request created.
+      let existing = await findDonor();
+      const isNewDonor = !existing;
+      if (!existing) {
         await tx
-          .update(schema.donors)
-          .set({
-            nik: input.nik,
-            displayName: input.name,
-            totalDonation,
-            tierCode: tier?.code ?? null,
-            lastSyncedAt: now,
-            updatedAt: now,
-          })
-          .where(eq(schema.donors.id, donorId));
-      } else {
-        const inserted = await tx
           .insert(schema.donors)
           .values({
             nik: input.nik,
@@ -389,11 +379,30 @@ export class PostgresStore implements AppStore {
             tierCode: tier?.code ?? null,
             lastSyncedAt: now,
           })
-          .returning({ id: schema.donors.id });
-        const donor = inserted[0];
-        if (!donor) throw new AppError(500, 'DONOR_UPSERT_FAILED', 'Donor tidak dapat disimpan');
-        donorId = donor.id;
+          .onConflictDoNothing();
+        existing = await findDonor();
       }
+      if (!existing) throw new AppError(500, 'DONOR_UPSERT_FAILED', 'Donor tidak dapat disimpan');
+      const donorId = existing.id;
+
+      // Serialise syncs for the same donor so points and fish are not double-applied.
+      const locked = await tx
+        .select({ tierCode: schema.donors.tierCode })
+        .from(schema.donors)
+        .where(eq(schema.donors.id, donorId))
+        .for('update');
+      const previousTier = isNewDonor ? null : (locked[0]?.tierCode ?? existing.tierCode);
+      await tx
+        .update(schema.donors)
+        .set({
+          nik: input.nik,
+          displayName: input.name,
+          totalDonation,
+          tierCode: tier?.code ?? null,
+          lastSyncedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(schema.donors.id, donorId));
 
       const publicSlug = `aqr-${randomBytes(9).toString('base64url')}`;
       await tx
@@ -409,30 +418,54 @@ export class PostgresStore implements AppStore {
       if (!aquarium)
         throw new AppError(500, 'AQUARIUM_CREATE_FAILED', 'Aquarium tidak dapat dibuat');
 
+      // Points: only the increase in donation-derived points since the last grant is added, so
+      // admin adjustments (and spending) are never undone by a later login.
       await tx
         .insert(schema.playerInventory)
         .values({ donorId })
         .onConflictDoNothing({ target: schema.playerInventory.donorId });
       const inventoryRows = await tx
-        .select({ points: schema.playerInventory.points })
+        .select({
+          points: schema.playerInventory.points,
+          granted: schema.playerInventory.donationPointsGranted,
+        })
         .from(schema.playerInventory)
         .where(eq(schema.playerInventory.donorId, donorId))
         .limit(1);
-      const awardedPoints = Math.min(2_147_483_647, Math.floor(input.totalDonation / 10_000));
-      if (awardedPoints > (inventoryRows[0]?.points ?? 0)) {
+      const inventory = inventoryRows[0] ?? { points: 0, granted: 0 };
+      const earned = Math.min(MAX_POINTS, Math.floor(input.totalDonation / 10_000));
+      if (earned > inventory.granted) {
         await tx
           .update(schema.playerInventory)
-          .set({ points: awardedPoints, updatedAt: now })
+          .set({
+            points: Math.min(MAX_POINTS, inventory.points + (earned - inventory.granted)),
+            donationPointsGranted: earned,
+            updatedAt: now,
+          })
           .where(eq(schema.playerInventory.donorId, donorId));
       }
 
-      const activeRows = await tx
-        .select({ id: schema.fish.id, tierCode: schema.fish.tierCode })
+      // Fish: sync manages only the fish it created. Donation and admin fish are never touched,
+      // and an admin's deactivation or tier override stands until the donor's real tier changes.
+      const syncRows = await tx
+        .select({
+          id: schema.fish.id,
+          tierCode: schema.fish.tierCode,
+          isActive: schema.fish.isActive,
+          deactivatedReason: schema.fish.deactivatedReason,
+        })
         .from(schema.fish)
-        .where(and(eq(schema.fish.aquariumId, aquarium.id), eq(schema.fish.isActive, true)))
+        .where(
+          and(eq(schema.fish.aquariumId, aquarium.id), eq(schema.fish.source, 'endowment_sync')),
+        )
         .orderBy(desc(schema.fish.createdAt))
         .limit(1);
-      const activeFish = activeRows[0];
+      const syncFish = syncRows[0];
+      const tierChanged = (tier?.code ?? null) !== previousTier;
+      const event = (fishId: string, eventType: string, payload: Record<string, unknown>) =>
+        tx
+          .insert(schema.gameEvents)
+          .values({ aquariumId: aquarium.id, fishId, eventType, payload });
 
       if (tier) {
         const speciesRows = await tx
@@ -449,8 +482,13 @@ export class PostgresStore implements AppStore {
         const species = speciesRows[0];
         if (!species)
           throw new AppError(500, 'SPECIES_NOT_CONFIGURED', 'Species untuk tier belum tersedia');
+        const payload = {
+          tierCode: tier.code,
+          speciesCode: species.code,
+          source: 'endowment.sync',
+        };
 
-        if (!activeFish) {
+        if (!syncFish) {
           const created = await tx
             .insert(schema.fish)
             .values({
@@ -458,48 +496,39 @@ export class PostgresStore implements AppStore {
               donationId: null,
               tierCode: tier.code,
               speciesCode: species.code,
+              source: 'endowment_sync',
             })
             .returning({ id: schema.fish.id });
           const createdFish = created[0];
           if (!createdFish)
             throw new AppError(500, 'FISH_CREATE_FAILED', 'Fish tidak dapat dibuat');
-          await tx.insert(schema.gameEvents).values({
-            aquariumId: aquarium.id,
-            fishId: createdFish.id,
-            eventType: 'fish.created',
-            payload: {
+          await event(createdFish.id, 'fish.created', payload);
+        } else if (!syncFish.isActive && syncFish.deactivatedReason === 'endowment_below_common') {
+          // Only undo deactivations that sync itself made; admin/refund deactivations stand.
+          await tx
+            .update(schema.fish)
+            .set({
+              isActive: true,
+              deactivatedReason: null,
               tierCode: tier.code,
               speciesCode: species.code,
-              source: 'endowment.sync',
-            },
-          });
-        } else if (activeFish.tierCode !== tier.code) {
+              updatedAt: now,
+            })
+            .where(eq(schema.fish.id, syncFish.id));
+          await event(syncFish.id, 'fish.created', { ...payload, reactivated: true });
+        } else if (syncFish.isActive && tierChanged && syncFish.tierCode !== tier.code) {
           await tx
             .update(schema.fish)
             .set({ tierCode: tier.code, speciesCode: species.code, updatedAt: now })
-            .where(eq(schema.fish.id, activeFish.id));
-          await tx.insert(schema.gameEvents).values({
-            aquariumId: aquarium.id,
-            fishId: activeFish.id,
-            eventType: 'fish.tier_changed',
-            payload: {
-              tierCode: tier.code,
-              speciesCode: species.code,
-              source: 'endowment.sync',
-            },
-          });
+            .where(eq(schema.fish.id, syncFish.id));
+          await event(syncFish.id, 'fish.tier_changed', payload);
         }
-      } else if (activeFish) {
+      } else if (syncFish?.isActive) {
         await tx
           .update(schema.fish)
-          .set({ isActive: false, updatedAt: now })
-          .where(eq(schema.fish.id, activeFish.id));
-        await tx.insert(schema.gameEvents).values({
-          aquariumId: aquarium.id,
-          fishId: activeFish.id,
-          eventType: 'fish.deactivated',
-          payload: { reason: 'endowment.total_below_common' },
-        });
+          .set({ isActive: false, deactivatedReason: 'endowment_below_common', updatedAt: now })
+          .where(eq(schema.fish.id, syncFish.id));
+        await event(syncFish.id, 'fish.deactivated', { reason: 'endowment.total_below_common' });
       }
 
       return {
@@ -965,7 +994,7 @@ export class PostgresStore implements AppStore {
         if (refundedFish.isActive) {
           await tx
             .update(schema.fish)
-            .set({ isActive: false, updatedAt: now })
+            .set({ isActive: false, deactivatedReason: 'refund', updatedAt: now })
             .where(eq(schema.fish.id, refundedFish.id));
           await tx.insert(schema.gameEvents).values({
             aquariumId: refundedFish.aquariumId,

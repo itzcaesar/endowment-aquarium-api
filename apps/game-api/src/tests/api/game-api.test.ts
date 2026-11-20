@@ -352,6 +352,16 @@ describe('Game API HTTP contract', () => {
     ).toBe(200);
   });
 
+  it('never rate-limits signed webhooks, even in bursts from one IP', async () => {
+    const statuses: number[] = [];
+    for (let index = 0; index < 110; index += 1) {
+      const body = confirmedEvent();
+      statuses.push((await webhookRequest(app, body, body.eventId)).statusCode);
+    }
+    expect(statuses.filter((status) => status === 429)).toHaveLength(0);
+    expect(statuses.every((status) => status === 202)).toBe(true);
+  });
+
   it('accepts a signed confirmed webhook once and returns stable species/asset codes', async () => {
     const body = confirmedEvent();
     const first = await webhookRequest(app, body, body.eventId);

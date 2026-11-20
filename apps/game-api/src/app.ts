@@ -558,7 +558,8 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   app.post(
     '/webhooks/v1/endowment',
     {
-      config: { rawBody: true },
+      // HMAC-authenticated server-to-server traffic: bursts (campaigns, replays) must not get 429s.
+      config: { rawBody: true, rateLimit: false },
       schema: {
         tags: ['webhooks'],
         headers: {

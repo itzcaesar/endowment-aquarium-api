@@ -464,5 +464,131 @@ integration('PostgreSQL integration (isolated TEST_DATABASE_URL only)', () => {
         select token_hash from access_tokens where token_hash like 'cleanup-%'`;
       expect(remaining.map((row) => row.token_hash)).toEqual(['cleanup-fresh']);
     });
+
+    it('keeps admin decisions across logins and only adds newly earned points', async () => {
+      const nik = '3171010101016666';
+      donorTotals.set(nik, 1_000_000);
+      const login = () => app.inject({ method: 'POST', url: '/api/v1/auth/nik', payload: { nik } });
+      const first = await login();
+      expect(first.statusCode).toBe(200);
+      const donorId = (
+        await connection.sql<{ id: string }[]>`select id from donors where nik = ${nik}`
+      )[0]!.id;
+      const points = async () =>
+        (
+          await connection.sql<{ points: number }[]>`
+            select points from player_inventory where donor_id = ${donorId}::uuid`
+        )[0]!.points;
+      expect(await points()).toBe(100);
+
+      // Admin deduction survives a re-login with the same total.
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/donors/${donorId}/inventory`,
+        headers,
+        payload: { pointsDelta: -60 },
+      });
+      await login();
+      expect(await points()).toBe(40);
+      // A higher total adds only the increase (1,500,000 -> +50).
+      donorTotals.set(nik, 1_500_000);
+      await login();
+      expect(await points()).toBe(90);
+
+      // Admin tier override stands while the donor's real tier is unchanged.
+      const fishId = (
+        await connection.sql<{ id: string }[]>`
+          select f.id from fish f join aquariums a on a.id = f.aquarium_id
+          where a.donor_id = ${donorId}::uuid`
+      )[0]!.id;
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+        payload: { tierCode: 'LEGENDARY', speciesCode: 'GOLDEN_WHALE', displayName: '   ' },
+      });
+      await login();
+      const fishAfter = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+      });
+      expect(fishAfter.json().data).toMatchObject({ tierCode: 'LEGENDARY', displayName: null });
+
+      // Admin deactivation stands: no replacement fish is created on login.
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+        payload: { isActive: false },
+      });
+      await login();
+      const fishRows = await connection.sql<
+        { is_active: boolean; deactivated_reason: string | null }[]
+      >`
+        select f.is_active, f.deactivated_reason from fish f join aquariums a on a.id = f.aquarium_id
+        where a.donor_id = ${donorId}::uuid`;
+      expect(fishRows).toEqual([{ is_active: false, deactivated_reason: 'admin' }]);
+
+      // Below-Common deactivation by sync is undone by sync when the total recovers.
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+        payload: { isActive: true },
+      });
+      donorTotals.set(nik, 1_000);
+      await login();
+      donorTotals.set(nik, 6_000_000);
+      await login();
+      const recovered = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/fish/${fishId}`,
+        headers,
+      });
+      expect(recovered.json().data).toMatchObject({ isActive: true, tierCode: 'EPIC' });
+    });
+
+    it('handles concurrent first logins for the same NIK without errors or duplicates', async () => {
+      const nik = '3171010101015555';
+      donorTotals.set(nik, 60_000);
+      // Fresh instance: the shared app has used up the 10/min NIK login budget.
+      const fresh = await createApp({
+        config: {
+          nodeEnv: 'test',
+          logLevel: 'silent',
+          port: 3000,
+          databaseUrl: testDatabaseUrl!,
+          webhookSecret: secret,
+          endowmentApiBaseUrl: 'http://127.0.0.1:4100',
+          endowmentApiTicket: 'test-endowment-ticket',
+          endowmentApiTimeoutMs: 2_000,
+          webhookTimestampToleranceSeconds: 300,
+          corsOrigins: [],
+        },
+        donorDirectory: {
+          findByNik: async (value: string) => ({
+            nik: value,
+            name: 'Concurrent Donor',
+            totalDonation: donorTotals.get(value) ?? 0,
+          }),
+        },
+      });
+      const responses = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          fresh.inject({ method: 'POST', url: '/api/v1/auth/nik', payload: { nik } }),
+        ),
+      ).finally(() => fresh.close());
+      expect(responses.map((response) => response.statusCode)).toEqual([
+        200, 200, 200, 200, 200, 200,
+      ]);
+      const counts = await connection.sql<{ donors: number; fish: number; points: number }[]>`
+        select (select count(*)::int from donors where nik = ${nik}) as donors,
+               (select count(*)::int from fish f join aquariums a on a.id = f.aquarium_id
+                  join donors d on d.id = a.donor_id where d.nik = ${nik}) as fish,
+               (select i.points from player_inventory i join donors d on d.id = i.donor_id
+                  where d.nik = ${nik}) as points`;
+      expect(counts[0]).toEqual({ donors: 1, fish: 1, points: 6 });
+    });
   });
 });

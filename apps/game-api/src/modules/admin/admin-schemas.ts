@@ -32,7 +32,14 @@ export const fishCreateSchema = z
 
 export const fishUpdateSchema = z
   .object({
-    displayName: z.string().trim().max(100).nullable().optional(),
+    /** Blank clears the name (null), so Unity falls back to the species name. */
+    displayName: z
+      .string()
+      .trim()
+      .max(100)
+      .nullable()
+      .optional()
+      .transform((value) => (value === '' ? null : value)),
     tierCode: tierCodeSchema.optional(),
     speciesCode: z.string().trim().min(1).max(50).optional(),
     colorCode: colorCodeSchema.optional(),

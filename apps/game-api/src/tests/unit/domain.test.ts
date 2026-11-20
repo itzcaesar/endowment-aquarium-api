@@ -10,6 +10,7 @@ import {
 import { tierSeed } from '../../db/seed-data.js';
 import { appearanceInputSchema, bigAquariumQuerySchema } from '@telu/contracts';
 import { toCsv } from '../../modules/admin/csv.js';
+import { donorLookupUrl } from '../../modules/endowment/donor-directory.js';
 import { hourlyBuckets } from '../../modules/dashboard/hourly-buckets.js';
 
 describe('tier resolver', () => {
@@ -186,5 +187,19 @@ describe('hourly buckets', () => {
     expect(buckets.at(-2)?.count).toBe(1);
     expect(buckets[0]).toEqual({ hour: '2026-11-19T13:00:00.000Z', count: 0 });
     expect(buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2);
+  });
+});
+
+describe('Endowment lookup URL', () => {
+  it('keeps any path prefix of the configured base URL', () => {
+    expect(donorLookupUrl('https://gw.example.ac.id/endowment', '3171010101010001').href).toBe(
+      'https://gw.example.ac.id/endowment/api/v1/donors/3171010101010001',
+    );
+    expect(donorLookupUrl('https://gw.example.ac.id/endowment/', '3171010101010001').href).toBe(
+      'https://gw.example.ac.id/endowment/api/v1/donors/3171010101010001',
+    );
+    expect(donorLookupUrl('http://127.0.0.1:4100', '3171010101010001').href).toBe(
+      'http://127.0.0.1:4100/api/v1/donors/3171010101010001',
+    );
   });
 });

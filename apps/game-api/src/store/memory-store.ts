@@ -73,6 +73,8 @@ interface MemoryFish {
   hunger: number;
   lastFedAt: Date | null;
   isActive: boolean;
+  source?: 'donation' | 'endowment_sync' | 'admin';
+  deactivatedReason?: string | null;
   createdAt: Date;
 }
 
@@ -93,7 +95,10 @@ export class MemoryStore implements AppStore {
   private readonly events: MemoryEvent[] = [];
   private readonly webhooks = new Map<string, Date>();
   private readonly tokens = new Map<string, { donorId: string; expiresAt: Date | null }>();
-  private readonly inventories = new Map<string, { points: number; ownedAccessories: string[] }>();
+  private readonly inventories = new Map<
+    string,
+    { points: number; ownedAccessories: string[]; granted?: number }
+  >();
   private nextEventId = 1;
 
   public async close(): Promise<void> {}
@@ -243,6 +248,7 @@ export class MemoryStore implements AppStore {
     const fish = [...this.fish.values()].find((item) => item.donationId === donation.id);
     if (fish?.isActive) {
       fish.isActive = false;
+      fish.deactivatedReason = 'refund';
       this.addEvent(fish.aquariumId, fish.id, 'fish.deactivated', { reason: 'donation.refunded' });
     }
     return { duplicate: false };
@@ -371,6 +377,7 @@ export class MemoryStore implements AppStore {
     let donor = [...this.donors.values()].find(
       (item) => item.nik === input.nik || item.externalId === input.nik,
     );
+    const previousTier = donor ? donor.tierCode : null;
     if (donor) {
       donor.nik = input.nik;
       donor.displayName = input.name;
@@ -403,18 +410,25 @@ export class MemoryStore implements AppStore {
       this.aquariums.set(donor.id, aquarium);
     }
 
+    // Mirrors PostgresStore.syncDonor: add only newly earned points; manage only sync fish.
     const inventory = this.inventories.get(donor.id) ?? { points: 0, ownedAccessories: [] };
-    inventory.points = Math.max(
-      inventory.points,
-      Math.min(2_147_483_647, Math.floor(input.totalDonation / 10_000)),
-    );
+    const earned = Math.min(2_147_483_647, Math.floor(input.totalDonation / 10_000));
+    const granted = inventory.granted ?? 0;
+    if (earned > granted) {
+      inventory.points = Math.min(2_147_483_647, inventory.points + (earned - granted));
+      inventory.granted = earned;
+    }
     this.inventories.set(donor.id, inventory);
 
-    const active = this.aquariumFish(aquarium.id, false)[0];
+    const syncFish = this.aquariumFish(aquarium.id, true).find(
+      (item) => item.source === 'endowment_sync',
+    );
+    const tierChanged = (tier?.code ?? null) !== previousTier;
     if (tier) {
       const species = speciesSeed.find((item) => item.defaultTierCode === tier.code);
       if (!species) throw new AppError(500, 'SPECIES_NOT_CONFIGURED', 'Species belum tersedia');
-      if (!active) {
+      const payload = { tierCode: tier.code, speciesCode: species.code, source: 'endowment.sync' };
+      if (!syncFish) {
         const fish: MemoryFish = {
           id: randomUUID(),
           aquariumId: aquarium.id,
@@ -426,26 +440,27 @@ export class MemoryStore implements AppStore {
           hunger: 100,
           lastFedAt: null,
           isActive: true,
+          source: 'endowment_sync',
+          deactivatedReason: null,
           createdAt: now,
         };
         this.fish.set(fish.id, fish);
-        this.addEvent(aquarium.id, fish.id, 'fish.created', {
-          tierCode: tier.code,
-          speciesCode: species.code,
-          source: 'endowment.sync',
-        });
-      } else if (active.tierCode !== tier.code) {
-        active.tierCode = tier.code;
-        active.speciesCode = species.code;
-        this.addEvent(aquarium.id, active.id, 'fish.tier_changed', {
-          tierCode: tier.code,
-          speciesCode: species.code,
-          source: 'endowment.sync',
-        });
+        this.addEvent(aquarium.id, fish.id, 'fish.created', payload);
+      } else if (!syncFish.isActive && syncFish.deactivatedReason === 'endowment_below_common') {
+        syncFish.isActive = true;
+        syncFish.deactivatedReason = null;
+        syncFish.tierCode = tier.code;
+        syncFish.speciesCode = species.code;
+        this.addEvent(aquarium.id, syncFish.id, 'fish.created', { ...payload, reactivated: true });
+      } else if (syncFish.isActive && tierChanged && syncFish.tierCode !== tier.code) {
+        syncFish.tierCode = tier.code;
+        syncFish.speciesCode = species.code;
+        this.addEvent(aquarium.id, syncFish.id, 'fish.tier_changed', payload);
       }
-    } else if (active) {
-      active.isActive = false;
-      this.addEvent(aquarium.id, active.id, 'fish.deactivated', {
+    } else if (syncFish?.isActive) {
+      syncFish.isActive = false;
+      syncFish.deactivatedReason = 'endowment_below_common';
+      this.addEvent(aquarium.id, syncFish.id, 'fish.deactivated', {
         reason: 'endowment.total_below_common',
       });
     }
