@@ -207,9 +207,10 @@ export class AdminService {
         throw new AppError(500, 'AQUARIUM_CREATE_FAILED', 'Aquarium tidak dapat dibuat');
 
       const created = await tx<{ id: string }[]>`
-        insert into fish (aquarium_id, tier_code, species_code, display_name, color_code, accessory_code)
+        insert into fish (aquarium_id, tier_code, species_code, display_name, color_code,
+                          accessory_code, source)
         values (${aquarium.id}::uuid, ${tierCode}, ${species.code}, ${input.displayName ?? null},
-                ${input.colorCode}, ${input.accessoryCode})
+                ${input.colorCode}, ${input.accessoryCode}, 'admin')
         returning id`;
       const fishId = created[0]?.id;
       if (!fishId) throw new AppError(500, 'FISH_CREATE_FAILED', 'Fish tidak dapat dibuat');
@@ -227,27 +228,33 @@ export class AdminService {
 
   public async updateFish(id: string, input: FishUpdateInput, actor: AdminActor, now: Date) {
     return this.sql.begin(async (tx) => {
+      // Lock first, then read: the snapshot cannot go stale before the update.
+      const lockedRows = await tx`select id from fish where id = ${id}::uuid for update`;
+      if (lockedRows.length === 0)
+        throw new AppError(404, 'FISH_NOT_FOUND', 'Fish tidak ditemukan');
       const before = await this.getFish(id, now, tx);
-      await tx`select id from fish where id = ${id}::uuid for update`;
 
-      const speciesCode = input.speciesCode ?? before.species.code;
       if (input.speciesCode) await this.speciesFor(tx, input.speciesCode);
       const nowIso = now.toISOString();
-      await tx`
-        update fish set
-          display_name = ${input.displayName === undefined ? before.displayName : input.displayName},
-          tier_code = ${input.tierCode ?? before.tierCode},
-          species_code = ${speciesCode},
-          color_code = ${input.colorCode ?? before.colorCode},
-          accessory_code = ${input.accessoryCode ?? before.accessoryCode},
-          is_active = ${input.isActive ?? before.isActive},
-          ${
-            input.hunger === undefined
-              ? tx``
-              : tx`hunger = ${input.hunger}, last_fed_at = ${nowIso}::timestamptz,`
-          }
-          updated_at = ${nowIso}::timestamptz
-        where id = ${id}::uuid`;
+      // Only the fields the admin sent are written, so concurrent player changes to other
+      // fields (e.g. appearance) are never overwritten.
+      const sets = [
+        input.displayName !== undefined ? tx`display_name = ${input.displayName}` : null,
+        input.tierCode !== undefined ? tx`tier_code = ${input.tierCode}` : null,
+        input.speciesCode !== undefined ? tx`species_code = ${input.speciesCode}` : null,
+        input.colorCode !== undefined ? tx`color_code = ${input.colorCode}` : null,
+        input.accessoryCode !== undefined ? tx`accessory_code = ${input.accessoryCode}` : null,
+        input.isActive !== undefined
+          ? tx`is_active = ${input.isActive},
+               deactivated_reason = ${input.isActive ? null : 'admin'}`
+          : null,
+        input.hunger !== undefined
+          ? tx`hunger = ${input.hunger}, last_fed_at = ${nowIso}::timestamptz`
+          : null,
+      ].filter((fragment) => fragment !== null);
+      const assignments = sets.reduce((joined, fragment) => tx`${joined}, ${fragment}`);
+      await tx`update fish set ${assignments}, updated_at = ${nowIso}::timestamptz
+               where id = ${id}::uuid`;
       const after = await this.getFish(id, now, tx);
 
       const changes: Record<string, { from: unknown; to: unknown }> = {};

@@ -66,11 +66,17 @@ export function normalizeDonorPayload(payload: unknown, expectedNik: string): En
   return { nik, name: name.slice(0, 150), totalDonation };
 }
 
+/** Appends the lookup path to the base URL, keeping any path prefix (e.g. an API gateway). */
+export function donorLookupUrl(baseUrl: string, nik: string): URL {
+  const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+  return new URL(`api/v1/donors/${encodeURIComponent(nik)}`, base);
+}
+
 export class HttpDonorDirectory implements DonorDirectory {
   public constructor(private readonly options: EndowmentClientOptions) {}
 
   public async findByNik(nik: string): Promise<EndowmentDonor> {
-    const url = new URL(`/api/v1/donors/${encodeURIComponent(nik)}`, this.options.baseUrl);
+    const url = donorLookupUrl(this.options.baseUrl, nik);
     let response: Response;
     try {
       response = await fetch(url, {

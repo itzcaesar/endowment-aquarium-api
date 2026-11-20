@@ -171,6 +171,10 @@ export const fish = pgTable(
     mood: fishMoodEnum('mood').notNull().default('happy'),
     lastFedAt: timestamp('last_fed_at', { withTimezone: true }),
     isActive: boolean('is_active').notNull().default(true),
+    /** donation (webhook), endowment_sync (NIK login) or admin. Sync only manages its own fish. */
+    source: varchar('source', { length: 20 }).notNull().default('donation'),
+    /** Why the fish is inactive: refund, admin, or endowment_below_common (sync may undo only the last). */
+    deactivatedReason: varchar('deactivated_reason', { length: 40 }),
     ...timestamps,
   },
   (table) => [
@@ -201,6 +205,8 @@ export const playerInventory = pgTable(
       .primaryKey()
       .references(() => donors.id, { onDelete: 'cascade' }),
     points: integer('points').notNull().default(0),
+    /** Points already granted from the donation total, so re-syncs only add the increase. */
+    donationPointsGranted: integer('donation_points_granted').notNull().default(0),
     ownedAccessories: jsonb('owned_accessories')
       .$type<string[]>()
       .notNull()
