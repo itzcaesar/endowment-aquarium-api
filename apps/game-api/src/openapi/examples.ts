@@ -209,6 +209,33 @@ export const responseExamples = {
       value: successEnvelope('req_123', emptyGameEventsPage),
     },
   ],
+  authNik: [
+    {
+      name: 'nikLogin',
+      summary: 'Donor authenticated from the Endowment NIK lookup',
+      value: successEnvelope('req_123', {
+        accessToken: 'raw-magic-token',
+        tokenType: 'Bearer',
+        expiresAt: '2026-07-27T10:00:00.000Z',
+        donor: {
+          nik: '3171010101010004',
+          name: 'Dewi Lestari',
+          tierCode: 'LEGENDARY',
+          totalDonation: 30_000_000,
+        },
+      }),
+    },
+  ],
+  inventory: [
+    {
+      name: 'inventory',
+      summary: 'Points and owned accessories for the authenticated donor',
+      value: successEnvelope('req_123', {
+        points: 3_000,
+        ownedAccessories: [],
+      }),
+    },
+  ],
   webhookAccepted: [
     {
       name: 'accepted',
@@ -290,6 +317,31 @@ export const errorExamples = {
       name: 'fishInactive',
       summary: 'Inactive fish cannot be changed',
       value: errorEnvelope('req_123', 'FISH_INACTIVE', 'Fish sudah tidak aktif'),
+    },
+  ],
+  donorNotFound: [
+    {
+      name: 'donorNotFound',
+      summary: 'NIK was not found in the Endowment API',
+      value: errorEnvelope('req_123', 'DONOR_NOT_FOUND', 'Donor tidak ditemukan di Endowment'),
+    },
+  ],
+  endowmentUnavailable: [
+    {
+      name: 'endowmentUnavailable',
+      summary: 'Endowment API cannot be reached',
+      value: errorEnvelope(
+        'req_123',
+        'ENDOWMENT_UNAVAILABLE',
+        'Layanan Endowment sedang bermasalah',
+      ),
+    },
+  ],
+  endowmentAuthFailed: [
+    {
+      name: 'endowmentAuthFailed',
+      summary: 'GAME API ticket was rejected by Endowment',
+      value: errorEnvelope('req_123', 'ENDOWMENT_AUTH_FAILED', 'Kredensial API Endowment ditolak'),
     },
   ],
   invalidWebhookSignature: [

@@ -19,6 +19,7 @@ ENV NODE_ENV=production
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages/contracts ./packages/contracts
 COPY --from=build /app/apps/game-api/dist ./apps/game-api/dist
+COPY --from=base /app/apps/game-api/public ./apps/game-api/public
 COPY --from=build /app/apps/mock-endowment-api/dist ./apps/mock-endowment-api/dist
 COPY --from=base /app/apps/game-api/package.json ./apps/game-api/package.json
 COPY --from=base /app/apps/mock-endowment-api/package.json ./apps/mock-endowment-api/package.json

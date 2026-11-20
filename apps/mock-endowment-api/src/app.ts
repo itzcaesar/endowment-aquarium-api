@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { createMockDonationSchema, type CreateMockDonationInput } from '@telu/contracts';
+import { createMockDonationSchema, nikSchema, type CreateMockDonationInput } from '@telu/contracts';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
@@ -9,6 +9,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { MockApiConfig } from './config/environment.js';
+import { MockDonorDirectory, isAuthorizedTicket } from './modules/donors/mock-donors.js';
 import {
   InMemoryMockStore,
   type MockDeliveryResult,
@@ -22,8 +23,17 @@ import { jsonSchema, parseInput } from './shared/validation.js';
 interface AppOptions {
   config: MockApiConfig;
   store?: MockStore;
+  donors?: MockDonorDirectory;
   deliver?: (rawBody: string, timestamp: string, eventId: string) => Promise<MockDeliveryResult>;
 }
+
+const mockDonorInputSchema = z
+  .object({
+    nik: nikSchema,
+    nama: z.string().trim().min(1).max(150),
+    total_donasi: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
 
 const deliverySchema = z.object({ statusCode: z.number().int(), responseBody: z.unknown() });
 const mockDonationSchema = z.object({
@@ -48,7 +58,14 @@ function publicRecord(record: ReturnType<MockStore['create']>) {
 
 export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: options.config.logLevel, redact: ['req.headers.x-endowment-signature'] },
+    logger: {
+      level: options.config.logLevel,
+      redact: [
+        'req.headers.x-endowment-signature',
+        'req.headers.authorization',
+        'req.headers["x-api-key"]',
+      ],
+    },
     bodyLimit: 1_048_576,
     genReqId: (request) => {
       const supplied = request.headers['x-request-id'];
@@ -61,6 +78,7 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
     (_request, body, done) => done(null, body || {}),
   );
   const store = options.store ?? new InMemoryMockStore();
+  const donors = options.donors ?? new MockDonorDirectory();
   const deliver =
     options.deliver ??
     (async (rawBody: string, timestamp: string, eventId: string) => {
@@ -153,6 +171,29 @@ export async function createApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/openapi.json', async () => app.swagger());
   app.get('/health', async (request) => successEnvelope(request.id, { status: 'ok' }));
   app.get('/mock/v1/health', async (request) => successEnvelope(request.id, { status: 'ok' }));
+
+  // Simulates the real Endowment server-to-server donor lookup used by the GAME API.
+  app.get('/api/v1/donors/:nik', { schema: { tags: ['endowment'] } }, async (request) => {
+    if (!isAuthorizedTicket(request.headers, options.config.endowmentApiTicket)) {
+      throw new AppError(401, 'UNAUTHORIZED', 'Ticket Endowment tidak valid');
+    }
+    const params = request.params as { nik?: string };
+    const nik = parseInput(nikSchema, params.nik);
+    const donor = donors.get(nik);
+    if (!donor) throw new AppError(404, 'DONOR_NOT_FOUND', 'Donor tidak ditemukan');
+    return successEnvelope(request.id, donor);
+  });
+
+  app.get('/mock/v1/donors', { schema: { tags: ['endowment'] } }, async (request) =>
+    successEnvelope(request.id, { donors: donors.list() }),
+  );
+
+  app.post(
+    '/mock/v1/donors',
+    { schema: { tags: ['endowment'], body: jsonSchema(mockDonorInputSchema) } },
+    async (request) =>
+      successEnvelope(request.id, donors.upsert(parseInput(mockDonorInputSchema, request.body))),
+  );
 
   app.post(
     '/mock/v1/donations',

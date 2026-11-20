@@ -15,6 +15,10 @@ const environmentSchema = z.object({
   GAME_API_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   DATABASE_URL: z.url().startsWith('postgresql://'),
   ENDOWMENT_WEBHOOK_SECRET: z.string().min(16),
+  ENDOWMENT_API_BASE_URL: z.url().startsWith('http'),
+  ENDOWMENT_API_TICKET: z.string().min(1),
+  ENDOWMENT_API_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  ADMIN_DASHBOARD_TOKEN: z.string().min(32).optional(),
   WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://localhost:8080'),
 });
@@ -25,6 +29,11 @@ export interface GameApiConfig {
   port: number;
   databaseUrl: string;
   webhookSecret: string;
+  endowmentApiBaseUrl: string;
+  endowmentApiTicket: string;
+  endowmentApiTimeoutMs: number;
+  /** Enables /api/v1/admin/stats for the ops dashboard when set. */
+  adminDashboardToken?: string;
   webhookTimestampToleranceSeconds: number;
   corsOrigins: string[];
 }
@@ -41,6 +50,10 @@ export function readGameApiConfig(environment: NodeJS.ProcessEnv = process.env):
     port: result.data.GAME_API_PORT,
     databaseUrl: result.data.DATABASE_URL,
     webhookSecret: result.data.ENDOWMENT_WEBHOOK_SECRET,
+    endowmentApiBaseUrl: result.data.ENDOWMENT_API_BASE_URL,
+    endowmentApiTicket: result.data.ENDOWMENT_API_TICKET,
+    endowmentApiTimeoutMs: result.data.ENDOWMENT_API_TIMEOUT_MS,
+    adminDashboardToken: result.data.ADMIN_DASHBOARD_TOKEN,
     webhookTimestampToleranceSeconds: result.data.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
     corsOrigins: result.data.CORS_ORIGINS.split(',')
       .map((origin) => origin.trim())

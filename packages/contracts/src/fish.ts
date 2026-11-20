@@ -5,7 +5,12 @@ export const accessoryCodes = ['NONE', 'TELU_CAP', 'GRADUATION_HAT'] as const;
 export const fishMoodCodes = ['happy', 'neutral', 'hungry'] as const;
 export const tierCodes = ['COMMON', 'RARE', 'EPIC', 'LEGENDARY'] as const;
 
-export const colorCodeSchema = z.enum(colorCodes);
+export const hexColorSchema = z
+  .string()
+  .regex(/^#[0-9A-Fa-f]{6}$/, 'Warna harus berformat HEX, contoh #00E5FF')
+  .transform((value) => value.toUpperCase());
+
+export const colorCodeSchema = z.union([z.enum(colorCodes), hexColorSchema]);
 export const accessoryCodeSchema = z.enum(accessoryCodes);
 export const fishMoodSchema = z.enum(fishMoodCodes);
 export const tierCodeSchema = z.enum(tierCodes);
